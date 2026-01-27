@@ -1,0 +1,61 @@
+# ======================
+# Python
+# ======================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# ======================
+# FastAPI / Uvicorn
+# ======================
+logs/
+media/
+*.pid
+
+# ======================
+# Docker
+# ======================
+*.tar
+docker-compose.override.yml
+
+# ======================
+# Nginx
+# ======================
+nginx/*.log
+
+# ======================
+# Frontend
+# ======================
+node_modules/
+dist/
+build/
+
+# ======================
+# IDE / OS
+# ======================
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ======================
+# Misc
+# ======================
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Databases
+db/
+*.db
