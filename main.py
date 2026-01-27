@@ -65,77 +65,71 @@ async def generate_pro(
     images: Optional[List[UploadFile]] = File(default=None),
 
 ):
-    try:
-        limit_generate(request)
+    limit_generate(request)
 
-        prompt = (prompt or "").strip()
-        if not prompt:
-            raise HTTPException(400, detail="Prompt is required")
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise HTTPException(400, detail="Prompt is required")
 
-        if len(prompt) > settings.MAX_PROMPT_LEN:
-            raise HTTPException(400, detail="Prompt too long")
+    if len(prompt) > settings.MAX_PROMPT_LEN:
+        raise HTTPException(400, detail="Prompt too long")
 
-        if resolution not in ("1K", "2K", "4K"):
-                raise HTTPException(400, detail="Invalid resolution")
+    if resolution not in ("1K", "2K", "4K"):
+            raise HTTPException(400, detail="Invalid resolution")
 
-        allowed_ar = {"1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9","21:9","auto"}
-        if aspectRatio not in allowed_ar:
-            raise HTTPException(400, detail="Invalid aspectRatio")
+    allowed_ar = {"1:1","2:3","3:2","3:4","4:3","4:5","5:4","9:16","16:9","21:9","auto"}
+    if aspectRatio not in allowed_ar:
+        raise HTTPException(400, detail="Invalid aspectRatio")
 
-        uploads = images or []
-        if len(uploads) > settings.MAX_IMAGE_URLS:
-            raise HTTPException(400, detail="Too many images")
+    uploads = images or []
+    if len(uploads) > settings.MAX_IMAGE_URLS:
+        raise HTTPException(400, detail="Too many images")
 
-        url_list = imageUrls or []
-        image_urls = [u for u in url_list if isinstance(u, str) and u.strip()]
-        local_files = []
-        max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+    url_list = imageUrls or []
+    image_urls = [u for u in url_list if isinstance(u, str) and u.strip()]
+    local_files = []
+    max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
 
-        for up in uploads:
-            try:
-                name = await save_upload(up, max_bytes=max_bytes)
-                local_files.append(name)
-                image_urls.append(f"{settings.PUBLIC_BASE_URL}/media/{name}")
-            except Exception as e:
-                logger.error(f"Error saving upload {up.filename}: {e}")
+    for up in uploads:
+        try:
+            name = await save_upload(up, max_bytes=max_bytes)
+            local_files.append(name)
+            image_urls.append(f"{settings.PUBLIC_BASE_URL}/media/{name}")
+        except Exception as e:
+            logger.error(f"Error saving upload {up.filename}: {e}")
+            raise e
 
-        data = {
-            "prompt": prompt,
-            "imageUrls": image_urls,
-            "resolution": resolution,
-            "aspectRatio": aspectRatio,
-            "callBackUrl": f"{settings.PUBLIC_BASE_URL}{settings.API_V1_PREFIX}/nanobanana/callback",
-        }
 
-        res = client.generate_pro(data)
-        if res.get("code") != 200:
-            logger.error(f"NanoBanana generate_pro error: {res.get('msg')}")
-            raise HTTPException(status_code=502, detail=res.get("msg", "NanoBanana error"))
+    data = {
+        "prompt": prompt,
+        "imageUrls": image_urls,
+        "resolution": resolution,
+        "aspectRatio": aspectRatio,
+        "callBackUrl": f"{settings.PUBLIC_BASE_URL}{settings.API_V1_PREFIX}/nanobanana/callback",
+    }
 
-        task_id = res["data"]["taskId"]
+    res = client.generate_pro(data)
+    if res.get("code") != 200:
+        logger.error(f"NanoBanana generate_pro error: {res.get('msg')}")
+        raise HTTPException(status_code=502, detail=res.get("msg", "NanoBanana error"))
 
-        # сохраним задачу
-        t = Task(
-            task_id=task_id,
-            status="running",
-            prompt=prompt,
-            image_urls=json.dumps(image_urls, ensure_ascii=False),
-            local_files=json.dumps(local_files, ensure_ascii=False),
-            resolution=resolution,
-            aspect_ratio=aspectRatio,
-            updated_at=datetime.now(timezone.utc),
-        )
-        db.merge(t)
-        db.commit()
+    task_id = res["data"]["taskId"]
 
-        return GenerateResponse(taskId=task_id)
+    # сохраним задачу
+    t = Task(
+        task_id=task_id,
+        status="running",
+        prompt=prompt,
+        image_urls=json.dumps(image_urls, ensure_ascii=False),
+        local_files=json.dumps(local_files, ensure_ascii=False),
+        resolution=resolution,
+        aspect_ratio=aspectRatio,
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.merge(t)
+    db.commit()
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Unexpected error in generate_pro: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
+    return GenerateResponse(taskId=task_id)
 
 @app.get(f"{settings.API_V1_PREFIX}/tasks/{{task_id}}")
 def get_task(task_id: str, db: Session = Depends(get_db)):
