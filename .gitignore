@@ -25,12 +25,10 @@ media/
 # ======================
 *.tar
 docker-compose.override.yml
-docker-compose.yml
 
 # ======================
 # Nginx
 # ======================
-nginx/
 nginx/*.log
 
 # ======================
