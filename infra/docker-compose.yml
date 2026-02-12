@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nb_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+      AUTH_DB_NAME: ${AUTH_DB_NAME}
+      AUTH_DB_USER: ${AUTH_DB_USER}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+
+      BILLING_DB_NAME: ${BILLING_DB_NAME}
+      BILLING_DB_USER: ${BILLING_DB_USER}
+      BILLING_DB_PASSWORD: ${BILLING_DB_PASSWORD}
+
+      AI_DB_NAME: ${AI_DB_NAME}
+      AI_DB_USER: ${AI_DB_USER}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD}
+    volumes:
+      - nb_pg_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    expose:
+      - "5432"
+
+  redis:
+    image: redis:7-alpine
+    container_name: nb_redis
+    restart: always
+    expose:
+      - "6379"
+
+  ai:
+    build: ../services/ai
+    container_name: nb_ai
+    restart: always
+    env_file:
+      - ../.env.dev
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${AI_DB_USER}:${AI_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${AI_DB_NAME}
+      REDIS_URL: ${REDIS_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      NANOBANANA_BASE_URL: ${NANOBANANA_BASE_URL}
+      NANOBANANA_API_KEY: ${NANOBANANA_API_KEY}
+    volumes:
+      - ../media:/app/media
+      - ../logs/ai:/app/logs
+    expose:
+      - "8000"
+    depends_on:
+      - postgres
+      - redis
+
+  auth:
+    build: ../services/auth
+    container_name: nb_auth
+    restart: always
+    env_file:
+      - ../.env.dev
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${AUTH_DB_USER}:${AUTH_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${AUTH_DB_NAME}
+      REDIS_URL: ${REDIS_URL}
+    volumes:
+      - ../logs/auth:/app/logs
+    expose:
+      - "8000"
+    depends_on:
+      - postgres
+      - redis
+
+  billing:
+    build: ../services/billing
+    container_name: nb_billing
+    restart: always
+    env_file:
+      - ../.env.dev
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${BILLING_DB_USER}:${BILLING_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${BILLING_DB_NAME}
+      REDIS_URL: ${REDIS_URL}
+    volumes:
+      - ../logs/billing:/app/logs
+    expose:
+      - "8000"
+    depends_on:
+      - postgres
+      - redis
+
+  nginx:
+    image: nginx:stable-alpine
+    container_name: nb_nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ${FRONTEND_DIST_PATH}:/frontend/dist:ro
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ../media:/app/media:ro
+    depends_on:
+      - ai
+      - auth
+      - billing
+
+volumes:
+  nb_pg_data:

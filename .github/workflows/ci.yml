@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ai, auth, billing]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry==1.8.3
+
+      - name: Install deps
+        working-directory: services/${{ matrix.service }}
+        run: |
+          poetry config virtualenvs.create true
+          poetry install --with dev --no-interaction --no-ansi
+
+      - name: Ruff
+        working-directory: services/${{ matrix.service }}
+        run: |
+          poetry run ruff check .
+
+      - name: Pytest
+        working-directory: services/${{ matrix.service }}
+        run: |
+          poetry run pytest -q

@@ -1,61 +1,41 @@
-# ======================
-# Python
-# ======================
+# env files
+.env
+.env.*
+!.env.*.example
+
+# python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.log
-*.sqlite3
-.env
-.venv/
-venv/
-env/
-ENV/
-
-# ======================
-# FastAPI / Uvicorn
-# ======================
-logs/
-media/
-*.pid
-
-# ======================
-# Docker
-# ======================
-*.tar
-docker-compose.override.yml
-
-# ======================
-# Nginx
-# ======================
-nginx/*.log
-
-# ======================
-# Frontend
-# ======================
-node_modules/
+*.so
+*.egg-info/
 dist/
 build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# ======================
-# IDE / OS
-# ======================
+# spa
+nanobanana_frontend/
+
+# venv
+.venv/
+venv/
+
+# IDE
 .idea/
 .vscode/
 *.swp
-*.swo
+
+# logs & runtime
+logs/
+media/
+*.log
+
+# OS
 .DS_Store
-Thumbs.db
 
-# ======================
-# Misc
-# ======================
-coverage/
-htmlcov/
-.pytest_cache/
-.mypy_cache/
+# Docker
+**/.dockerignore
 
-# Databases
-db/
-*.db
