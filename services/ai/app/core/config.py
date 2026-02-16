@@ -27,5 +27,10 @@ class Settings(BaseSettings):
 
     MEDIA_DIR: str = "media"
     AUTO_CREATE_TABLES: bool = False
+    STORE_RESULTS: bool = False
+
+    JWT_SECRET: str
+    JWT_ALG: str = "HS256"
+    AUTH_REQUIRED: bool = True
 
 settings = Settings()

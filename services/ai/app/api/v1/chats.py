@@ -1,101 +1,146 @@
-from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, Form, HTTPException
-from sqlalchemy import select, update
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_async_session
+from app.api.deps import get_current_user
+
 from app.models.chat import Chat
 from app.models.message import Message
+from app.services.history import touch_chat
 
 router = APIRouter(tags=["chats"])
 
 
-@router.post("/chats")
-async def create_chat(
-    title: str | None = Form(None),
-    session: AsyncSession = Depends(get_async_session),
-):
-    chat = Chat(title=(title or "").strip())
-    session.add(chat)
-    await session.commit()
-    await session.refresh(chat)
-    return {"chat_id": chat.id, "title": chat.title}
+async def _get_chat_owned(session: AsyncSession, chat_id: str, user_id: str) -> Chat:
+    chat = await session.get(Chat, chat_id)
+    if not chat or chat.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    # “claim” старых чатов после добавления user_id
+    if chat.user_id is None:
+        chat.user_id = user_id
+        await session.commit()
+        await session.refresh(chat)
+
+    if chat.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    return chat
 
 
 @router.get("/chats")
-async def list_chats(session: AsyncSession = Depends(get_async_session)):
-    q = select(Chat).where(Chat.deleted_at.is_(None)).order_by(Chat.updated_at.desc())
+async def list_chats(
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
+    limit: int = 50,
+    offset: int = 0,
+):
+    user_id = user_ctx.get("user_id")
+
+    q = (
+        select(Chat)
+        .where(Chat.user_id == user_id, Chat.deleted_at.is_(None))
+        .order_by(desc(Chat.updated_at))
+        .limit(limit)
+        .offset(offset)
+    )
     rows = (await session.execute(q)).scalars().all()
-    return {"chats": [{"chat_id": c.id, "title": c.title, "created_at": c.created_at, "updated_at": c.updated_at} for c in rows]}
 
-
-@router.get("/chats/{chat_id}")
-async def get_chat(chat_id: str, session: AsyncSession = Depends(get_async_session)):
-    chat = await session.get(Chat, chat_id)
-    if not chat or chat.deleted_at is not None:
-        raise HTTPException(404, "Chat not found")
-    return {"chat_id": chat.id, "title": chat.title, "created_at": chat.created_at, "updated_at": chat.updated_at}
-
-
-@router.delete("/chats/{chat_id}")
-async def delete_chat(chat_id: str, session: AsyncSession = Depends(get_async_session)):
-    chat = await session.get(Chat, chat_id)
-    if not chat or chat.deleted_at is not None:
-        raise HTTPException(404, "Chat not found")
-
-    chat.deleted_at = datetime.now(timezone.utc)
-    await session.commit()
-    return {"message": "deleted"}
-
-
-@router.get("/chats/{chat_id}/messages")
-async def list_messages(chat_id: str, session: AsyncSession = Depends(get_async_session)):
-    chat = await session.get(Chat, chat_id)
-    if not chat or chat.deleted_at is not None:
-        raise HTTPException(404, "Chat not found")
-
-    q = select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at.asc())
-    rows = (await session.execute(q)).scalars().all()
     return {
-        "messages": [
+        "chats": [
             {
-                "message_id": m.id,
-                "role": m.role,
-                "content": m.content,
-                "meta_json": m.meta_json,
-                "task_id": m.task_id,
-                "created_at": m.created_at,
+                "chatId": c.id,
+                "title": c.title,
+                "status": c.status,
+                "created_at": c.created_at,
+                "updated_at": c.updated_at,
             }
-            for m in rows
+            for c in rows
         ]
     }
 
 
-@router.post("/chats/{chat_id}/messages")
-async def add_message(
+@router.get("/chats/{chat_id}")
+async def get_chat(
     chat_id: str,
-    role: str = Form("user"),
-    content: str = Form(...),
-    meta_json: str | None = Form(None),
-    task_id: str | None = Form(None),
     session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
 ):
-    chat = await session.get(Chat, chat_id)
-    if not chat or chat.deleted_at is not None:
-        raise HTTPException(404, "Chat not found")
+    user_id = user_ctx.get("user_id")
+    c = await _get_chat_owned(session, chat_id, user_id)
 
-    msg = Message(
-        chat_id=chat_id,
-        role=(role or "user").strip(),
-        content=(content or "").strip(),
-        meta_json=meta_json or "{}",
-        task_id=task_id,
+    return {
+        "chatId": c.id,
+        "title": c.title,
+        "status": c.status,
+        "created_at": c.created_at,
+        "updated_at": c.updated_at,
+    }
+
+
+@router.get("/chats/{chat_id}/messages")
+async def get_messages(
+    chat_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
+):
+    user_id = user_ctx.get("user_id")
+    await _get_chat_owned(session, chat_id, user_id)
+
+    q = (
+        select(Message)
+        .where(Message.chat_id == chat_id, Message.user_id == user_id)
+        .order_by(Message.created_at.asc())
     )
-    session.add(msg)
+    msgs = (await session.execute(q)).scalars().all()
 
-    # обновим updated_at чата (простая история “последняя активность”)
-    await session.execute(update(Chat).where(Chat.id == chat_id).values(updated_at=datetime.now(timezone.utc)))
+    return {
+        "messages": [
+            {
+                "messageId": m.id,
+                "role": m.role,
+                "content": m.content,
+                "meta_json": m.meta_json,
+                "taskId": m.task_id,
+                "created_at": m.created_at,
+            }
+            for m in msgs
+        ]
+    }
 
-    await session.commit()
-    await session.refresh(msg)
-    return {"message_id": msg.id, "created_at": msg.created_at}
+
+@router.post("/chats/{chat_id}/close")
+async def close_chat(
+    chat_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
+):
+    user_id = user_ctx.get("user_id")
+    c = await _get_chat_owned(session, chat_id, user_id)
+
+    if c.status != "closed":
+        c.status = "closed"
+        await touch_chat(session, chat_id)
+        await session.commit()
+
+    return {"status": "ok"}
+
+
+@router.delete("/chats/{chat_id}")
+async def delete_chat(
+    chat_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
+):
+    user_id = user_ctx.get("user_id")
+    c = await _get_chat_owned(session, chat_id, user_id)
+
+    if c.deleted_at is None:
+        from datetime import datetime, timezone
+        c.deleted_at = datetime.now(timezone.utc)
+
+        await touch_chat(session, chat_id)
+        await session.commit()
+
+    return {"status": "ok"}

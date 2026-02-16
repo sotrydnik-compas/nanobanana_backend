@@ -1,5 +1,6 @@
 from sqlalchemy import String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 from app.database.base import Base, TimestampMixin
 
@@ -21,4 +22,5 @@ class Task(Base, TimestampMixin):
 
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     chat_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)

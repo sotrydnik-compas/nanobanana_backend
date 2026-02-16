@@ -1,16 +1,24 @@
-from datetime import datetime, timezone
+import json
 from fastapi import APIRouter, Request, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.session import get_async_session
 from app.models.task import Task
+from app.models.message import Message
+from app.models.chat import Chat
 from app.services.uploads import cleanup_task_files
+from app.services.history import touch_chat
 from app.core.logger import logger
 
 router = APIRouter(tags=["callbacks"])
 
+
 @router.post("/nanobanana/callback")
-async def nanobanana_callback(request: Request, session: AsyncSession = Depends(get_async_session)):
+async def nanobanana_callback(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+):
     try:
         payload = await request.json()
 
@@ -21,19 +29,51 @@ async def nanobanana_callback(request: Request, session: AsyncSession = Depends(
         result_image_url = info.get("resultImageUrl")
 
         t = await session.get(Task, task_id) if task_id else None
-        if t:
-            if code == 200:
-                t.status = "success"
-                t.result_image_url = result_image_url
-                cleanup_task_files(t)
-            else:
-                t.status = "failed"
-                t.error_message = payload.get("msg")
-                cleanup_task_files(t)
-                logger.error(f"Callback task {task_id} failed with code {code}: {t.error_message}")
-            t.updated_at = datetime.now(timezone.utc)
-            await session.commit()
+        if not t:
+            return {"status": "received"}
 
+        if code == 200:
+            t.status = "success"
+            t.result_image_url = result_image_url
+            cleanup_task_files(t)
+        else:
+            t.status = "failed"
+            t.error_message = payload.get("msg")
+            cleanup_task_files(t)
+            logger.error(f"Callback task {task_id} failed with code {code}: {t.error_message}")
+
+        if t.chat_id:
+            # (опционально) claim chat.user_id, если пусто
+            chat = await session.get(Chat, t.chat_id)
+            if chat and chat.user_id is None and t.user_id:
+                chat.user_id = t.user_id
+
+            exists_q = select(Message.id).where(
+                Message.chat_id == t.chat_id,
+                Message.task_id == t.task_id,
+                Message.role == "assistant",
+            )
+            exists = (await session.execute(exists_q)).first()
+
+            if not exists:
+                meta = {
+                    "successFlag": 1 if t.status == "success" else 2,
+                    "resultImageUrl": t.result_image_url,
+                    "errorMessage": t.error_message,
+                }
+                session.add(
+                    Message(
+                        chat_id=t.chat_id,
+                        user_id=t.user_id,
+                        role="assistant",
+                        content="",
+                        meta_json=json.dumps(meta, ensure_ascii=False),
+                        task_id=t.task_id,
+                    )
+                )
+                await touch_chat(session, t.chat_id)
+
+        await session.commit()
         return {"status": "received"}
 
     except Exception as e:

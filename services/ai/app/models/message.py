@@ -12,8 +12,9 @@ class Message(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4()))
     chat_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("chats.id", ondelete="CASCADE"), index=True)
 
-    role: Mapped[str] = mapped_column(String(16), default="user")  # user/assistant/system
+    role: Mapped[str] = mapped_column(String(16), default="user")  # user|assistant|system
     content: Mapped[str] = mapped_column(Text, default="")
     meta_json: Mapped[str] = mapped_column(Text, default="{}")
 
-    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)  # link to tasks.task_id (optional)
+    user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
