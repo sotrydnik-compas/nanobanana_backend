@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 
@@ -11,7 +12,6 @@ from app.core.config import settings
 from app.core.logger import logger
 from app.core.rate_limit import limit_generate
 from app.database.session import get_async_session
-
 from app.api.deps import get_current_user
 
 from app.models.task import Task
@@ -23,10 +23,13 @@ from app.services.history import get_last_success_result_url, touch_chat
 from app.services.uploads import save_upload, cleanup_task_files
 
 from app.clients.nanobanana_client import NanoBananaClient
+from app.clients.billing_client import BillingClient, BillingNoFunds
 
 
 router = APIRouter(tags=["tasks"])
+
 client = NanoBananaClient()
+billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOKEN)
 
 
 def _now() -> datetime:
@@ -52,6 +55,8 @@ async def generate_pro(
     limit_generate(request)
 
     user_id = user_ctx.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     prompt = (prompt or "").strip()
     if not prompt:
@@ -117,6 +122,17 @@ async def generate_pro(
         await session.refresh(chat)
         chat_id = chat.id
 
+    # BILLING: reserve -> (cancel|confirm)
+    request_id = str(uuid.uuid4())
+
+    try:
+        await billing.reserve(user_id=user_id, request_id=request_id, cost=1)
+    except BillingNoFunds:
+        raise HTTPException(status_code=402, detail="Not enough requests")
+    except Exception as e:
+        logger.error(f"[billing] reserve failed: {e}")
+        raise HTTPException(status_code=503, detail="Billing unavailable")
+
     data = {
         "prompt": prompt,
         "imageUrls": image_urls,
@@ -125,14 +141,36 @@ async def generate_pro(
         "callBackUrl": f"{settings.PUBLIC_BASE_URL}/api/v1/ai/nanobanana/callback",
     }
 
-    # requests() блокирующий → уводим в thread
-    res = await anyio.to_thread.run_sync(client.generate_pro, data)
-    if res.get("code") != 200:
+    # зовём nanobanana (в thread)
+    try:
+        res = await anyio.to_thread.run_sync(client.generate_pro, data)
+    except Exception as e:
+        # обязательный cancel, потому что task_id не получен
+        try:
+            await billing.cancel(user_id=user_id, request_id=request_id)
+        except Exception as ce:
+            logger.error(f"[billing] cancel failed after nanobanana exception: {ce}")
+        raise
+
+    # если nanobanana вернул ошибку ДО task_id -> обязательный cancel
+    if res.get("code") != 200 or not (res.get("data") or {}).get("taskId"):
+        try:
+            await billing.cancel(user_id=user_id, request_id=request_id)
+        except Exception as ce:
+            logger.error(f"[billing] cancel failed after nanobanana error: {ce}")
+
         logger.error(f"NanoBanana generate_pro error: {res.get('msg')}")
         raise HTTPException(status_code=502, detail=res.get("msg", "NanoBanana error"))
 
     task_id = res["data"]["taskId"]
 
+    # confirm: если confirm упадёт — не валим запрос пользователю (task уже создан у nanobanana)
+    try:
+        await billing.confirm(user_id=user_id, request_id=request_id, task_id=task_id)
+    except Exception as e:
+        logger.error(f"[billing] confirm failed (request_id={request_id}, task_id={task_id}): {e}")
+
+    # сохраняем task + user-message
     t = Task(
         task_id=task_id,
         status="running",
@@ -177,6 +215,8 @@ async def get_task(
     user_ctx: dict = Depends(get_current_user),
 ):
     user_id = user_ctx.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
     t = await session.get(Task, task_id)
     if not t:

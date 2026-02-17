@@ -33,4 +33,7 @@ class Settings(BaseSettings):
     JWT_ALG: str = "HS256"
     AUTH_REQUIRED: bool = True
 
+    BILLING_BASE_URL: str = ""
+    BILLING_INTERNAL_TOKEN: str = ""
+
 settings = Settings()

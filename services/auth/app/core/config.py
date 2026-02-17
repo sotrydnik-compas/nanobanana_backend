@@ -24,4 +24,14 @@ class Settings(BaseSettings):
     EMAIL_VERIFY_TTL_HOURS: int = 24
     PASSWORD_RESET_TTL_MIN: int = 30
 
+    MAIL_ENABLED: bool = False
+    UNISENDER_BASE_URL: str = "https://go1.unisender.ru/ru/transactional/api/v1"
+    UNISENDER_API_KEY: str = ""
+    MAIL_FROM_EMAIL: str = ""
+    MAIL_FROM_NAME: str = "NanoBanana"
+
+    CODE_TTL_SECONDS: int = 900  # 15 минут
+    CODE_RESEND_COOLDOWN_SECONDS: int = 60
+    CODE_MAX_ATTEMPTS: int = 10
+
 settings = Settings()

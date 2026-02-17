@@ -3,9 +3,12 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import router as v1_router
 from app.core.config import settings
-from app.core.logger import logger
-from app.database.session import async_engine
-from app.database.base import Base
+from app.core.logger import setup_logging
+# from app.core.logger import logger
+# from app.database.session import async_engine
+# from app.database.base import Base
+
+setup_logging()
 
 app = FastAPI(
     title="NanoBanana AI Service",
