@@ -3,6 +3,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.database.session import get_async_session
 from app.models.task import Task
 from app.models.message import Message
@@ -11,7 +12,11 @@ from app.services.uploads import cleanup_task_files
 from app.services.history import touch_chat
 from app.core.logger import logger
 
+from app.clients.billing_client import BillingClient
+
 router = APIRouter(tags=["callbacks"])
+
+billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOKEN)
 
 
 @router.post("/nanobanana/callback")
@@ -36,14 +41,36 @@ async def nanobanana_callback(
             t.status = "success"
             t.result_image_url = result_image_url
             cleanup_task_files(t)
+
+            # reconcile confirm
+            if t.billing_request_id and t.billing_state != "confirmed":
+                try:
+                    await billing.confirm(user_id=str(t.user_id), request_id=t.billing_request_id, task_id=t.task_id)
+                    t.billing_state = "confirmed"
+                except Exception as e:
+                    t.billing_state = "confirm_pending"
+                    logger.error(f"[billing] callback confirm failed task={t.task_id}: {e}")
+
         else:
             t.status = "failed"
             t.error_message = payload.get("msg")
             cleanup_task_files(t)
             logger.error(f"Callback task {task_id} failed with code {code}: {t.error_message}")
 
+            # refund
+            if t.billing_request_id and t.billing_state != "refunded":
+                try:
+                    await billing.fail(
+                        user_id=str(t.user_id),
+                        request_id=t.billing_request_id,
+                        task_id=t.task_id,
+                        error=t.error_message,
+                    )
+                    t.billing_state = "refunded"
+                except Exception as e:
+                    logger.error(f"[billing] callback refund failed task={t.task_id}: {e}")
+
         if t.chat_id:
-            # (опционально) claim chat.user_id, если пусто
             chat = await session.get(Chat, t.chat_id)
             if chat and chat.user_id is None and t.user_id:
                 chat.user_id = t.user_id

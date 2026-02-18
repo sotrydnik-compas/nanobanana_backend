@@ -1,12 +1,15 @@
-import uuid
+from jose import jwt
+from jose.exceptions import JWTError
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+from app.core.logger import logger
 from app.database.session import get_async_session
 from app.models.payment import Payment
-from app.models.plan import Plan
-from app.models.user_balance import UserBalance
+from app.services.payment_status import map_to_internal_status, apply_payment_status
 
 router = APIRouter(tags=["webhooks"])
 
@@ -17,48 +20,56 @@ async def provider_webhook(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
 ):
-    payload = await request.json()
+    if provider != settings.PAYMENT_PROVIDER:
+        raise HTTPException(404, "Unknown provider")
 
-    # Минимальный контракт для теста:
-    # { "payment_id": "<uuid>", "status": "succeeded|failed|canceled", "provider_payment_id": "..."? }
-    pid = payload.get("payment_id")
-    status = payload.get("status")
+    # Точка присылает JWT строкой в body
+    raw = (await request.body()).decode("utf-8", errors="ignore").strip()
+    if not raw:
+        raise HTTPException(400, "Empty body")
 
-    if not pid or status not in ("succeeded", "failed", "canceled"):
+    # verify RS256
+    try:
+        payload = jwt.decode(
+            raw,
+            settings.TOCHKA_WEBHOOK_PUBLIC_KEY,
+            algorithms=["RS256"],
+            options={"verify_aud": False},
+        )
+    except JWTError as e:
+        logger.error(f"[tochka-webhook] invalid signature: {e}")
+        raise HTTPException(401, "Invalid webhook signature")
+
+    # интересует только acquiringInternetPayment
+    if payload.get("webhookType") != "acquiringInternetPayment":
+        return {"status": "ignored"}
+
+    operation_id = payload.get("operationId")
+    tochka_status = payload.get("status")  # APPROVED / AUTHORIZED
+    if not operation_id or not tochka_status:
         raise HTTPException(400, "Invalid payload")
 
-    try:
-        payment_uuid = uuid.UUID(pid)
-    except Exception:
-        raise HTTPException(400, "Invalid payment_id")
+    new_status = map_to_internal_status(tochka_status)
 
     async with session.begin():
-        p = (await session.execute(select(Payment).where(Payment.id == payment_uuid))).scalars().first()
+        # ищем платеж по provider_payment_id
+        p = (
+            (await session.execute(
+                select(Payment)
+                .where(
+                    Payment.provider == settings.PAYMENT_PROVIDER,
+                    Payment.provider_payment_id == operation_id,
+                )
+                .with_for_update()
+            ))
+            .scalars()
+            .first()
+        )
         if not p:
-            raise HTTPException(404, "Payment not found")
-
-        # идемпотентность: если уже succeeded — повторный succeeded не начисляет второй раз
-        if p.status == "succeeded" and status == "succeeded":
+            # вернуть 200, чтобы Точка не ретраяла
+            logger.warning(f"[tochka-webhook] payment not found operationId={operation_id}")
             return {"status": "ok"}
 
-        p.provider_payment_id = payload.get("provider_payment_id") or p.provider_payment_id
-        p.status = status
-
-        if status == "succeeded":
-            plan = (await session.execute(select(Plan).where(Plan.id == p.plan_id))).scalars().first()
-            if not plan:
-                raise HTTPException(500, "Plan missing")
-
-            bal = (
-                await session.execute(
-                    select(UserBalance).where(UserBalance.user_id == p.user_id).with_for_update()
-                )
-            ).scalars().first()
-            if not bal:
-                bal = UserBalance(user_id=p.user_id, requests_left=0)
-                session.add(bal)
-                await session.flush()
-
-            bal.requests_left += plan.requests_total
+        await apply_payment_status(session, p, new_status)
 
     return {"status": "ok"}

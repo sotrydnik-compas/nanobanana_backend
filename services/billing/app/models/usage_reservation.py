@@ -22,8 +22,10 @@ class UsageReservation(Base, TimestampMixin):
 
     cost: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")  # reserved/confirmed/canceled
+    # reserved/confirmed/canceled/refunded
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
 
     reserved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

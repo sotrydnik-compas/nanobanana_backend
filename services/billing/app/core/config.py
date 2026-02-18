@@ -1,7 +1,9 @@
 import os
+from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = os.getenv("ENV_FILE")
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -23,8 +25,27 @@ class Settings(BaseSettings):
     # Внутренний токен для вызовов от ai
     INTERNAL_TOKEN: str
 
-    # (пока заглушки под провайдера)
-    PAYMENT_PROVIDER: str = "dummy"
+    # Данные провайдера
+    PAYMENT_PROVIDER: str = "tochka"
     CURRENCY: str = "RUB"
+
+    # TOCHKA API
+    TOCHKA_BASE_URL: str = "https://enter.tochka.com"
+    # "/sandbox/v2" или "/uapi"
+    TOCHKA_API_PREFIX: str = "/sandbox/v2"
+
+    TOCHKA_BEARER_TOKEN: str
+    TOCHKA_CUSTOMER_CODE: str
+    TOCHKA_MERCHANT_ID: str
+
+    # В env удобно хранить как JSON: ["sbp","card"]
+    TOCHKA_PAYMENT_MODES: List[str] = ["sbp", "card"]
+
+    TOCHKA_REDIRECT_URL: str = "https://localhost/widget"
+    TOCHKA_FAIL_REDIRECT_URL: str = "https://localhost/widget"
+
+    # Публичный ключ OpenAPI (PEM). В env можно хранить одной строкой с \n
+    TOCHKA_WEBHOOK_PUBLIC_KEY: str
+
 
 settings = Settings()

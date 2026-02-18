@@ -24,3 +24,7 @@ class Task(Base, TimestampMixin):
 
     user_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     chat_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), nullable=True, index=True)
+
+    billing_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    billing_state: Mapped[str] = mapped_column(String(16), default="none")
+    # значения: none | reserved | confirm_pending | confirmed | refunded

@@ -123,3 +123,74 @@ async def confirm(session: AsyncSession, user_id: str, request_id: uuid.UUID, ta
         r.confirmed_at = _now()
         await session.flush()
         return r
+
+
+async def fail(
+    session: AsyncSession,
+    user_id: str,
+    request_id: uuid.UUID,
+    task_id: str,
+    error: str | None = None,  # пока не сохраняем, просто принимаем
+) -> UsageReservation:
+    """
+    fail = "генерация не удалась -> вернуть запрос пользователю"
+    Правила:
+      - если reservation reserved -> делаем cancel (возврат cost)
+      - если confirmed -> refund (возврат cost) и status=refunded
+      - если canceled/refunded -> идемпотентно return
+    """
+    async with session.begin():
+        r = (
+            await session.execute(select(UsageReservation).where(UsageReservation.request_id == request_id))
+        ).scalars().first()
+
+        if not r:
+            raise ReservationConflict("reservation not found")
+
+        if r.user_id != user_id:
+            raise ReservationConflict("reservation belongs to another user")
+
+        if r.status in ("canceled", "refunded"):
+            return r
+
+        # если confirmed — проверяем, что task_id не конфликтует
+        if r.status == "confirmed":
+            if r.task_id and r.task_id != task_id:
+                raise ReservationConflict("reservation confirmed with another task_id")
+            if not r.task_id:
+                r.task_id = task_id
+
+            bal = (
+                await session.execute(
+                    select(UserBalance).where(UserBalance.user_id == user_id).with_for_update()
+                )
+            ).scalars().first()
+
+            if not bal:
+                bal = UserBalance(user_id=user_id, requests_left=0)
+                session.add(bal)
+                await session.flush()
+
+            bal.requests_left += r.cost
+            r.status = "refunded"
+            r.refunded_at = _now()
+            await session.flush()
+            return r
+
+        # иначе status == reserved -> по смыслу это cancel
+        bal = (
+            await session.execute(
+                select(UserBalance).where(UserBalance.user_id == user_id).with_for_update()
+            )
+        ).scalars().first()
+
+        if not bal:
+            bal = UserBalance(user_id=user_id, requests_left=0)
+            session.add(bal)
+            await session.flush()
+
+        bal.requests_left += r.cost
+        r.status = "canceled"
+        r.canceled_at = _now()
+        await session.flush()
+        return r

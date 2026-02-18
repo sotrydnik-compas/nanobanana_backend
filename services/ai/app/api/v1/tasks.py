@@ -36,6 +36,38 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def _reconcile_success(t: Task) -> None:
+    # confirm могли не успеть сделать в generate-pro (или сеть легла)
+    if not t.billing_request_id:
+        return
+    if t.billing_state == "confirmed":
+        return
+    try:
+        await billing.confirm(user_id=str(t.user_id), request_id=t.billing_request_id, task_id=t.task_id)
+        t.billing_state = "confirmed"
+    except Exception as e:
+        t.billing_state = "confirm_pending"
+        logger.error(f"[billing] reconcile confirm failed task={t.task_id}: {e}")
+
+
+async def _reconcile_failed(t: Task) -> None:
+    # если генерация упала — вернуть запрос (cancel если не подтверждали / refund если подтверждали)
+    if not t.billing_request_id:
+        return
+    if t.billing_state == "refunded":
+        return
+    try:
+        await billing.fail(
+            user_id=str(t.user_id),
+            request_id=t.billing_request_id,
+            task_id=t.task_id,
+            error=t.error_message,
+        )
+        t.billing_state = "refunded"
+    except Exception as e:
+        logger.error(f"[billing] reconcile fail/refund failed task={t.task_id}: {e}")
+
+
 @router.post("/generate-pro")
 @router.post("/tasks")  # совместимость
 async def generate_pro(
@@ -126,7 +158,7 @@ async def generate_pro(
     request_id = str(uuid.uuid4())
 
     try:
-        await billing.reserve(user_id=user_id, request_id=request_id, cost=1)
+        await billing.reserve(user_id=str(user_id), request_id=request_id, cost=1)
     except BillingNoFunds:
         raise HTTPException(status_code=402, detail="Not enough requests")
     except Exception as e:
@@ -147,7 +179,7 @@ async def generate_pro(
     except Exception as e:
         # обязательный cancel, потому что task_id не получен
         try:
-            await billing.cancel(user_id=user_id, request_id=request_id)
+            await billing.cancel(user_id=str(user_id), request_id=request_id)
         except Exception as ce:
             logger.error(f"[billing] cancel failed after nanobanana exception: {ce}")
         raise
@@ -155,7 +187,7 @@ async def generate_pro(
     # если nanobanana вернул ошибку ДО task_id -> обязательный cancel
     if res.get("code") != 200 or not (res.get("data") or {}).get("taskId"):
         try:
-            await billing.cancel(user_id=user_id, request_id=request_id)
+            await billing.cancel(user_id=str(user_id), request_id=request_id)
         except Exception as ce:
             logger.error(f"[billing] cancel failed after nanobanana error: {ce}")
 
@@ -164,10 +196,12 @@ async def generate_pro(
 
     task_id = res["data"]["taskId"]
 
-    # confirm: если confirm упадёт — не валим запрос пользователю (task уже создан у nanobanana)
+    # confirm: если confirm упадёт — не валим запрос пользователю, дотянем reconcile позже
+    billing_state = "confirmed"
     try:
-        await billing.confirm(user_id=user_id, request_id=request_id, task_id=task_id)
+        await billing.confirm(user_id=str(user_id), request_id=request_id, task_id=task_id)
     except Exception as e:
+        billing_state = "confirm_pending"
         logger.error(f"[billing] confirm failed (request_id={request_id}, task_id={task_id}): {e}")
 
     # сохраняем task + user-message
@@ -182,6 +216,8 @@ async def generate_pro(
         last_polled_at=None,
         chat_id=chat_id,
         user_id=user_id,
+        billing_request_id=request_id,
+        billing_state=billing_state,
     )
     await session.merge(t)
 
@@ -231,7 +267,14 @@ async def get_task(
     if t.user_id != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    # если финал уже был — reconcile и вернуть
     if t.status in ("success", "failed"):
+        if t.status == "success":
+            await _reconcile_success(t)
+        else:
+            await _reconcile_failed(t)
+        await session.commit()
+
         return {
             "code": 200,
             "msg": "success",
@@ -274,11 +317,14 @@ async def get_task(
         t.status = "success"
         t.result_image_url = (response or {}).get("resultImageUrl")
         cleanup_task_files(t)
+        await _reconcile_success(t)
+
     elif success_flag in (2, 3):
         t.status = "failed"
         t.error_message = data.get("errorMessage")
         cleanup_task_files(t)
         logger.error(f"Task {t.task_id} failed: {t.error_message}")
+        await _reconcile_failed(t)
 
     # если задача финализировалась — кладём assistant-message в историю (1 раз)
     if t.chat_id and t.status in ("success", "failed"):
