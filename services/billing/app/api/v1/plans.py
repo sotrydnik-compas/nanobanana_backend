@@ -10,7 +10,7 @@ router = APIRouter(tags=["plans"])
 
 @router.get("/plans")
 async def list_plans(session: AsyncSession = Depends(get_async_session)):
-    q = select(Plan).where(Plan.is_active.is_(True)).order_by(Plan.created_at.desc())
+    q = select(Plan).where(Plan.is_active.is_(True)).order_by(Plan.price_minor.asc())
     rows = (await session.execute(q)).scalars().all()
     return {
         "plans": [

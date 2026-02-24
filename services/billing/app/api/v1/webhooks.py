@@ -66,7 +66,7 @@ async def provider_webhook(
             .first()
         )
         if not p:
-            # вернуть 200, чтобы Точка не ретраяла
+            # вернуть 200, чтобы Точка не ретраила
             logger.warning(f"[tochka-webhook] payment not found operationId={operation_id}")
             return {"status": "ok"}
 

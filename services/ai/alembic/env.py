@@ -12,6 +12,7 @@ from app.database.base import Base
 from app.models.task import Task  # noqa: F401
 from app.models.chat import Chat  # noqa: F401
 from app.models.message import Message  # noqa: F401
+from app.models.sample import Sample
 
 config = context.config
 if config.config_file_name is not None:

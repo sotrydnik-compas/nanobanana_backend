@@ -69,7 +69,6 @@ async def _reconcile_failed(t: Task) -> None:
 
 
 @router.post("/generate-pro")
-@router.post("/tasks")  # совместимость
 async def generate_pro(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
