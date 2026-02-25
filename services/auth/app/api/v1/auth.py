@@ -11,6 +11,7 @@ from app.core.security import (
     create_access_token,
     create_refresh_token,
     safe_decode_token,
+    validate_password_strength,
 )
 from app.models.user import User
 from app.models.refresh_session import RefreshSession
@@ -40,8 +41,10 @@ async def register(
     email_n = (email or "").strip().lower()
     if not email_n or "@" not in email_n:
         raise HTTPException(400, "Invalid email")
-    if not password or len(password) < 8:
-        raise HTTPException(400, "Password must be at least 8 chars")
+
+    is_valid, msg = validate_password_strength(password)
+    if not is_valid:
+        raise HTTPException(400, msg)
 
     exists = (await session.execute(select(User.id).where(User.email == email_n))).first()
     if exists:
@@ -237,8 +240,10 @@ async def reset_confirm(
     session: AsyncSession = Depends(get_async_session),
 ):
     email_n = (email or "").strip().lower()
-    if not new_password or len(new_password) < 8:
-        raise HTTPException(400, "Password must be at least 8 chars")
+
+    is_valid, msg = validate_password_strength(new_password)
+    if not is_valid:
+        raise HTTPException(400, msg)
 
     ok = await verify_code("reset", email_n, code)
     if not ok:

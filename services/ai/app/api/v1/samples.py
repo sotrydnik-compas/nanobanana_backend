@@ -1,8 +1,9 @@
-from typing import List, Optional
+import os
+
+from typing import List
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from sqlalchemy.orm import selectinload
 
 from app.database.session import get_async_session
 from app.api.deps import get_current_user
@@ -33,7 +34,7 @@ async def get_samples(
     total_count = total_count_result.scalar()
 
     # Получаем записи с пагинацией
-    query = select(Sample).order_by(Sample.created_at.desc()).offset(offset).limit(page_size)
+    query = select(Sample).where(Sample.is_active == True).order_by(Sample.created_at.desc()).offset(offset).limit(page_size)
     result = await session.execute(query)
     samples = result.scalars().all()
 
@@ -89,7 +90,7 @@ async def upload_samples(
     created_samples = []
     try:
         for path in saved_paths:
-            sample = Sample(path=path)
+            sample = Sample(path=path, is_active=False)
             session.add(sample)
             created_samples.append(sample)
 

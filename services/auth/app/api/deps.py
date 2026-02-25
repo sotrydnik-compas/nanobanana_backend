@@ -39,3 +39,16 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not verified")
 
     return user
+
+
+def _is_admin_role(role: str | None) -> bool:
+    if not role:
+        return False
+    r = str(role).lower()
+    return r in ("admin", "superadmin")
+
+
+async def require_admin(user=Depends(get_current_user)):
+    if not _is_admin_role(user.get("role")):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user

@@ -1,3 +1,5 @@
+import re
+
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -61,3 +63,26 @@ def safe_decode_token(token: str) -> tuple[dict | None, str | None]:
         return None, "expired"
     except JWTError:
         return None, "invalid"
+
+
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """
+    Валидация пароля:
+    - минимум 8 символов
+    - минимум одна буква
+    - минимум одна заглавная буква
+    - только латиница
+    """
+    if not password or len(password) < 8:
+        return False, "Password must be at least 8 characters"
+
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain at least one lowercase letter"
+
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain at least one uppercase letter"
+
+    if not re.match(r'^[A-Za-z0-9!@#$%^&*()_+\-=\[\]{};:\'",.<>/?\\|`~]+$', password):
+        return False, "Password can only contain Latin letters, numbers, and special characters"
+
+    return True, ""

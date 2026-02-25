@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update, select
 
 from app.api.deps import get_current_user
-from app.core.security import verify_password, hash_password
+from app.core.security import verify_password, hash_password, validate_password_strength
 from app.database.session import get_async_session
 from app.models.user import User
 from app.models.refresh_session import RefreshSession
@@ -30,8 +30,10 @@ async def change_password(
 ):
     if not verify_password(old_password, user.password_hash):
         raise HTTPException(400, "Invalid old password")
-    if not new_password or len(new_password) < 8:
-        raise HTTPException(400, "Password must be at least 8 chars")
+
+    is_valid, msg = validate_password_strength(new_password)
+    if not is_valid:
+        raise HTTPException(400, msg)
 
     user.password_hash = hash_password(new_password)
 

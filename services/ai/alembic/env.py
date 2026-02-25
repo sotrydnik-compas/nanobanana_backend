@@ -13,6 +13,7 @@ from app.models.task import Task  # noqa: F401
 from app.models.chat import Chat  # noqa: F401
 from app.models.message import Message  # noqa: F401
 from app.models.sample import Sample
+from app.models.prompt_template import PromptTemplate, PromptVariant
 
 config = context.config
 if config.config_file_name is not None:
