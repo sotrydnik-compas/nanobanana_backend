@@ -1,8 +1,9 @@
-from sqlalchemy import String, Text, DateTime
+from sqlalchemy import String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
 from app.database.base import Base, TimestampMixin
+
 
 class Task(Base, TimestampMixin):
     __tablename__ = "tasks"
@@ -28,3 +29,11 @@ class Task(Base, TimestampMixin):
     billing_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     billing_state: Mapped[str] = mapped_column(String(16), default="none")
     # значения: none | reserved | confirm_pending | confirmed | refunded
+
+    batch_item_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("batch_items.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+    

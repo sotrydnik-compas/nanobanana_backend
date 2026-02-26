@@ -4,9 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import router as v1_router
 from app.core.config import settings
 from app.core.logger import setup_logging
-# from app.core.logger import logger
-# from app.database.session import async_engine
-# from app.database.base import Base
+from app.services.arq_queue import close_arq_pool
 
 setup_logging()
 
@@ -28,3 +26,8 @@ app.mount("/media", StaticFiles(directory=settings.MEDIA_DIR), name="media")
 #         async with async_engine.begin() as conn:
 #             await conn.run_sync(Base.metadata.create_all)
 #         logger.info("AUTO_CREATE_TABLES enabled: created tables if missing")
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Закрываем пул ARQ при завершении"""
+    await close_arq_pool()

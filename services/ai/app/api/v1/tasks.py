@@ -68,6 +68,101 @@ async def _reconcile_failed(t: Task) -> None:
         logger.error(f"[billing] reconcile fail/refund failed task={t.task_id}: {e}")
 
 
+async def _get_task_status(task: Task, session: AsyncSession) -> dict:
+    """
+    Внутренняя функция для получения статуса задачи.
+    Вынесена из get_task для переиспользования в batch processing.
+    """
+    # если финал уже был — reconcile и вернуть
+    if task.status in ("success", "failed"):
+        if task.status == "success":
+            await _reconcile_success(task)
+        else:
+            await _reconcile_failed(task)
+        await session.commit()
+
+        return {
+            "code": 200,
+            "msg": "success",
+            "data": {
+                "taskId": task.task_id,
+                "successFlag": 1 if task.status == "success" else 2,
+                "response": {"resultImageUrl": task.result_image_url} if task.result_image_url else None,
+                "errorMessage": task.error_message,
+            },
+        }
+
+    now = _now()
+    last = task.last_polled_at
+    should_poll = last is None or (now - last) >= timedelta(seconds=settings.POLL_INTERVAL_SECONDS)
+
+    if not should_poll:
+        return {
+            "code": 200,
+            "msg": "success",
+            "data": {"taskId": task.task_id, "successFlag": 0, "response": None, "errorMessage": None},
+        }
+
+    res = await anyio.to_thread.run_sync(client.record_info, task.task_id)
+    task.last_polled_at = now
+
+    if res.get("code") != 200:
+        logger.warning(f"NanoBanana record_info failed for task {task.task_id}")
+        await session.commit()
+        return {
+            "code": 200,
+            "msg": "success",
+            "data": {"taskId": task.task_id, "successFlag": 0, "response": None, "errorMessage": None},
+        }
+
+    data = res.get("data") or {}
+    success_flag = data.get("successFlag", 0)
+    response = data.get("response")
+
+    if success_flag == 1 and response:
+        task.status = "success"
+        task.result_image_url = (response or {}).get("resultImageUrl")
+        cleanup_task_files(task)
+        await _reconcile_success(task)
+
+    elif success_flag in (2, 3):
+        task.status = "failed"
+        task.error_message = data.get("errorMessage")
+        cleanup_task_files(task)
+        logger.error(f"Task {task.task_id} failed: {task.error_message}")
+        await _reconcile_failed(task)
+
+    # если задача финализировалась — кладём assistant-message в историю (1 раз)
+    if task.chat_id and task.status in ("success", "failed"):
+        exists_q = select(Message.id).where(
+            Message.chat_id == task.chat_id,
+            Message.task_id == task.task_id,
+            Message.role == "assistant",
+        )
+        exists = (await session.execute(exists_q)).first()
+
+        if not exists:
+            meta = {
+                "successFlag": 1 if task.status == "success" else 2,
+                "resultImageUrl": task.result_image_url,
+                "errorMessage": task.error_message,
+            }
+            session.add(
+                Message(
+                    chat_id=task.chat_id,
+                    user_id=task.user_id,
+                    role="assistant",
+                    content="",
+                    meta_json=json.dumps(meta, ensure_ascii=False),
+                    task_id=task.task_id,
+                )
+            )
+            await touch_chat(session, task.chat_id)
+
+    await session.commit()
+    return res
+
+
 @router.post("/generate-pro")
 async def generate_pro(
     request: Request,

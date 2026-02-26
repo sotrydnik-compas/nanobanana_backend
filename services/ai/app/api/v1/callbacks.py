@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,7 @@ from app.database.session import get_async_session
 from app.models.task import Task
 from app.models.message import Message
 from app.models.chat import Chat
+from app.models.batch import BatchItem
 from app.services.uploads import cleanup_task_files
 from app.services.history import touch_chat
 from app.core.logger import logger
@@ -21,8 +23,8 @@ billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOK
 
 @router.post("/nanobanana/callback")
 async def nanobanana_callback(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
+        request: Request,
+        session: AsyncSession = Depends(get_async_session),
 ):
     try:
         payload = await request.json()
@@ -37,6 +39,7 @@ async def nanobanana_callback(
         if not t:
             return {"status": "received"}
 
+        # Существующая логика для обычных задач
         if code == 200:
             t.status = "success"
             t.result_image_url = result_image_url
@@ -70,6 +73,7 @@ async def nanobanana_callback(
                 except Exception as e:
                     logger.error(f"[billing] callback refund failed task={t.task_id}: {e}")
 
+        # Обновляем чат
         if t.chat_id:
             chat = await session.get(Chat, t.chat_id)
             if chat and chat.user_id is None and t.user_id:
@@ -99,6 +103,22 @@ async def nanobanana_callback(
                     )
                 )
                 await touch_chat(session, t.chat_id)
+
+        # Если задача связана с BatchItem, обновляем его
+        if t.batch_item_id:
+            batch_item = await session.get(BatchItem, t.batch_item_id)
+            if batch_item:
+                if t.status == "success":
+                    batch_item.status = "success"
+                    batch_item.result_image_url = t.result_image_url
+                else:
+                    batch_item.status = "failed"
+                    batch_item.error_message = t.error_message
+
+                batch_item.completed_at = datetime.now(timezone.utc)
+
+                # Здесь НЕ запускаем следующий элемент - это делает ARQ worker
+                logger.info(f"Batch item {batch_item.id} updated via callback")
 
         await session.commit()
         return {"status": "received"}

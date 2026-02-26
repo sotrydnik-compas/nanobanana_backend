@@ -1,4 +1,4 @@
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, status, Depends
 from app.core.security import safe_decode_token
 from app.services.blacklist import is_blacklisted
 from app.core.config import settings
@@ -27,3 +27,16 @@ async def get_current_user(authorization: str | None = Header(default=None)) -> 
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
 
     return {"user_id": user_id, "email": payload.get("email"), "role": payload.get("role")}
+
+
+def _is_admin_role(role: str | None) -> bool:
+    if not role:
+        return False
+    r = str(role).lower()
+    return r in ("admin", "superadmin")
+
+
+async def require_admin(user=Depends(get_current_user)):
+    if not _is_admin_role(user.get("role")):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
