@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sqlalchemy import select
 
 from app.database.session import get_async_session
@@ -101,5 +102,47 @@ async def get_template_variants(
                 "sort_order": v.sort_order
             }
             for v in variants
+        ]
+    }
+
+
+@router.get("/prompts/render/template")
+async def get_template_with_variants(
+    template_name: str = Query(..., description="Имя шаблона (например: 'product_card')"),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Получить информацию о шаблоне (template_text) и список его активных вариантов.
+    Используется фронтом для отображения редактора промптов.
+    """
+    template_result = await session.execute(
+        select(PromptTemplate)
+        .options(selectinload(PromptTemplate.variants))
+        .where(
+            PromptTemplate.name == template_name,
+            PromptTemplate.is_active == True
+        )
+    )
+    template = template_result.scalar_one_or_none()
+    if not template:
+        raise HTTPException(404, f"Active template with name '{template_name}' not found")
+
+    # Фильтруем только активные варианты и сортируем
+    active_variants = [
+        v for v in template.variants
+        if v.is_active
+    ]
+    active_variants.sort(key=lambda x: x.sort_order)
+
+    return {
+        "template_name": template.name,
+        "template_text": template.template_text,
+        "variants": [
+            {
+                "key": v.key,
+                "label": v.label,
+                "sort_order": v.sort_order
+            }
+            for v in active_variants
         ]
     }

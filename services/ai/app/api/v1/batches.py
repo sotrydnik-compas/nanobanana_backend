@@ -62,7 +62,7 @@ async def validate_images(
 async def generate_batch(
         prompt: str = Form(..., description="Промт для генерации"),
         resolution: str = Form("1K", description="Разрешение: 1K, 2K, 4K"),
-        aspect_ratio: str = Form("1:1", description="Соотношение сторон"),
+        aspectRatio: str = Form("1:1", description="Соотношение сторон"),
         image_urls: Optional[List[str]] = Form(None, description="URL изображений"),
         images: Optional[List[UploadFile]] = File(None, description="Файлы изображений"),
         chat_id: Optional[str] = Form(None, description="ID существующего чата"),
@@ -90,7 +90,7 @@ async def generate_batch(
 
     # Валидация aspect ratio
     allowed_ar = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "auto"}
-    if aspect_ratio not in allowed_ar:
+    if aspectRatio not in allowed_ar:
         raise HTTPException(400, "Invalid aspectRatio")
 
     # Сохраняем и валидируем изображения
@@ -151,7 +151,7 @@ async def generate_batch(
         chat_id=chat_id,
         prompt=prompt,
         resolution=resolution,
-        aspect_ratio=aspect_ratio,
+        aspect_ratio=aspectRatio,
         total_count=total_images,
         billing_request_id=request_id,
         billing_state="reserved"

@@ -3,7 +3,8 @@ import os
 from typing import Optional, List
 from fastapi import APIRouter, Form, HTTPException, Depends, Query, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 
 from app.database.session import get_async_session
@@ -29,7 +30,7 @@ async def admin_list_templates(
     """
     Получить список всех шаблонов промптов
     """
-    query = select(PromptTemplate)
+    query = select(PromptTemplate).options(selectinload(PromptTemplate.variants))
 
     # Фильтры
     if is_active is not None:
@@ -57,7 +58,7 @@ async def admin_list_templates(
                 "is_active": t.is_active,
                 "created_at": t.created_at,
                 "updated_at": t.updated_at,
-                "variants_count": len(t.variants) if hasattr(t, 'variants') else 0
+                "variants_count": len(t.variants)
             }
             for t in templates
         ],
@@ -472,12 +473,7 @@ async def admin_update_sample(
     sample.is_active = is_active
     await session.commit()
 
-    return {
-        "id": sample.id,
-        "path": sample.path,
-        "is_active": sample.is_active,
-        "updated_at": sample.updated_at
-    }
+    return {"status": "ok", "message": f"Sample {sample_id} updated"}
 
 
 @router.delete("/admin/samples/{sample_id}")

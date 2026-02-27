@@ -34,4 +34,5 @@ class Settings(BaseSettings):
     CODE_RESEND_COOLDOWN_SECONDS: int = 60
     CODE_MAX_ATTEMPTS: int = 10
 
+
 settings = Settings()

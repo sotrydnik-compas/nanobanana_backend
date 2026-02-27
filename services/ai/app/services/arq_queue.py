@@ -79,21 +79,40 @@ async def _create_nanobanana_task(
     return res["data"]["taskId"]
 
 
-async def _update_task_status_from_callback(task_id: str, session: AsyncSession) -> Optional[BatchItem]:
-    """Получить актуальный статус задачи (использует существующую логику get_task)"""
+async def _update_task_status_from_callback(
+        task_id: str,
+        session: AsyncSession
+) -> Optional[BatchItem]:
+    """
+    Обновить статус задачи через опрос NanoBanana и вернуть связанный BatchItem если задача завершена.
+    Использует существующую логику get_task из tasks.py
+    """
     from app.api.v1.tasks import _get_task_status  # импортируем существующую функцию
 
     task = await session.get(Task, task_id)
     if not task:
+        logger.warning(f"Task {task_id} not found")
         return None
 
     # Используем существующую логику опроса
+    old_status = task.status
     await _get_task_status(task, session)
+
+    # Если статус изменился, логируем
+    if old_status != task.status:
+        logger.info(f"Task {task_id} status changed: {old_status} -> {task.status}")
 
     # Если задача финализировалась, ищем связанный BatchItem
     if task.status in ("success", "failed") and task.batch_item_id:
         batch_item = await session.get(BatchItem, task.batch_item_id)
-        return batch_item
+        if batch_item:
+            # Обновляем BatchItem в соответствии со статусом задачи
+            batch_item.status = task.status
+            batch_item.result_image_url = task.result_image_url
+            batch_item.error_message = task.error_message
+            batch_item.completed_at = datetime.now(timezone.utc)
+            await session.commit()
+            return batch_item
 
     return None
 
@@ -152,7 +171,7 @@ async def process_batch_item(
         await session.commit()
 
         try:
-            # 1. Создаем задачу в NanoBanana
+            # Создаем задачу в NanoBanana
             callback_url = f"{settings.PUBLIC_BASE_URL}/api/v1/ai/nanobanana/callback"
             image_url = item.image_url
             if item.local_file:
@@ -166,7 +185,7 @@ async def process_batch_item(
                 callback_url=callback_url
             )
 
-            # 2. Создаем Task в БД (как в generate-pro)
+            # Создаем Task в БД
             task = Task(
                 task_id=task_id,
                 status="running",
@@ -181,11 +200,10 @@ async def process_batch_item(
             )
             await session.merge(task)
 
-            # Связываем item с task
             item.task_id = task_id
             await session.commit()
 
-            # 3. Добавляем user message в чат
+            # Добавляем user message в чат
             meta = {
                 "batch": True,
                 "batch_item_index": item_index,
@@ -201,53 +219,36 @@ async def process_batch_item(
                 task_id=task_id
             )
 
-            # 4. Ждем завершения задачи (polling)
+            # Ждем завершения задачи с активным опросом
             max_wait = 300  # 5 минут
             poll_interval = settings.POLL_INTERVAL_SECONDS
             waited = 0
+            task_completed = False
 
-            while waited < max_wait:
+            while waited < max_wait and not task_completed:
                 await asyncio.sleep(poll_interval)
                 waited += poll_interval
 
-                # Обновляем сессию
-                await session.refresh(task)
+                # Вызываем функцию обновления статуса - она опросит NanoBanana и обновит БД
+                completed_item = await _update_task_status_from_callback(task_id, session)
 
-                if task.status in ("success", "failed"):
+                # Если задача завершена, выходим из цикла
+                if completed_item:
+                    logger.info(f"Item {item_id} completed with status {completed_item.status}")
+                    task_completed = True
                     break
 
                 # Проверяем, не отменен ли пакет
                 await session.refresh(batch)
                 if batch.status == "cancelling":
                     logger.info(f"Batch {batch_id} cancelled during item {item_index} processing")
-                    # Задача в NanoBanana продолжит выполнение
                     return
 
-            # 5. Обрабатываем результат
-            if task.status == "success":
-                item.status = "success"
-                item.result_image_url = task.result_image_url
-                item.completed_at = datetime.now(timezone.utc)
-                batch.success_count += 1
-
-                # Assistant message уже добавится через callback,
-                # но добавим отдельное сообщение о завершении элемента
-                await _add_message_to_chat(
-                    session=session,
-                    chat_id=batch.chat_id,
-                    user_id=batch.user_id,
-                    role="assistant",
-                    content=f"✅ Элемент {item_index + 1}/{batch.total_count} обработан",
-                    meta={
-                        "batch_item_complete": True,
-                        "result_image_url": task.result_image_url
-                    },
-                    task_id=task_id
-                )
-
-            else:
+            # Если вышли по таймауту
+            if not task_completed:
+                logger.error(f"Item {item_id} timed out after {max_wait} seconds")
                 item.status = "failed"
-                item.error_message = task.error_message or "Unknown error"
+                item.error_message = "Timeout waiting for task completion"
                 item.completed_at = datetime.now(timezone.utc)
                 batch.failed_count += 1
 
@@ -256,12 +257,19 @@ async def process_batch_item(
                     chat_id=batch.chat_id,
                     user_id=batch.user_id,
                     role="assistant",
-                    content=f"❌ Ошибка при обработке элемента {item_index + 1}/{batch.total_count}: {item.error_message}",
-                    meta={"batch_item_error": True},
-                    task_id=task_id
+                    content=f"Таймаут при обработке элемента {item_index + 1}/{batch.total_count}",
+                    meta={"batch_item_error": True, "timeout": True}
                 )
 
-            # 6. Обновляем счетчики
+            # Обновляем счетчики (если еще не обновлено через completed_item)
+            await session.refresh(item)
+            await session.refresh(batch)
+
+            if item.status == "success":
+                batch.success_count = batch.success_count
+            elif item.status == "failed":
+                batch.failed_count = batch.failed_count
+
             batch.processed_count += 1
             batch.current_item_index = item_index + 1
             await session.commit()
@@ -282,7 +290,7 @@ async def process_batch_item(
                 chat_id=batch.chat_id,
                 user_id=batch.user_id,
                 role="assistant",
-                content=f"❌ Системная ошибка при обработке элемента {item_index + 1}/{batch.total_count}: {str(e)}",
+                content=f"Системная ошибка при обработке элемента {item_index + 1}/{batch.total_count}: {str(e)}",
                 meta={"batch_item_error": True}
             )
 
