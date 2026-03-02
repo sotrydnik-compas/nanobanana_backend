@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     MAX_IMAGE_URLS: int = 8
     MAX_UPLOAD_MB: int = 10
     POLL_INTERVAL_SECONDS: int = 30
+    TIMEOUT_SECONDS: int = 999
+    ARQ_MAX_JOBS: int = 4
 
     MEDIA_DIR: str = "media"
     AUTO_CREATE_TABLES: bool = False
@@ -35,5 +37,6 @@ class Settings(BaseSettings):
 
     BILLING_BASE_URL: str = ""
     BILLING_INTERNAL_TOKEN: str = ""
+
 
 settings = Settings()

@@ -5,6 +5,7 @@ from arq import Worker
 
 from app.services.arq_queue import WORKER_FUNCTIONS, REDIS_SETTINGS
 from app.core.logger import setup_logging
+from app.core.config import settings
 
 # Настраиваем логирование
 setup_logging()
@@ -17,13 +18,14 @@ async def main():
     logger.info(f"Registered functions: {[f.__name__ for f in WORKER_FUNCTIONS]}")
 
     # Создаем и запускаем worker
+    max_jobs = settings.ARQ_MAX_JOBS
     worker = Worker(
         functions=WORKER_FUNCTIONS,
         redis_settings=REDIS_SETTINGS,
         queue_name="arq:queue",
         poll_delay=0.5,
-        max_jobs=1,
-        job_timeout=3600,
+        max_jobs=max_jobs,
+        job_timeout=7200,
         health_check_interval=60
     )
 

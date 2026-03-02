@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 import json
 
 from datetime import datetime, timezone
@@ -6,7 +7,7 @@ from typing import Optional
 
 from arq import create_pool
 from arq.connections import RedisSettings
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -15,6 +16,7 @@ from app.database.session import AsyncSessionLocal
 from app.models.batch import BatchJob, BatchItem
 from app.models.task import Task
 from app.models.message import Message
+from app.clients.billing_client import BillingClient, BillingNoFunds
 from app.clients.nanobanana_client import NanoBananaClient
 from app.services.history import touch_chat
 
@@ -24,6 +26,7 @@ REDIS_SETTINGS = RedisSettings.from_dsn(
 )
 
 _pool = None
+billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOKEN)
 
 
 async def get_arq_pool():
@@ -160,15 +163,62 @@ async def process_batch_item(
             logger.error(f"Batch or item not found: {batch_id}/{item_id}")
             return
 
-        # Проверяем, не отменен ли пакет
+        # Если отмена уже запрошена ДО старта элемента — просто не стартуем его
         if batch.status == "cancelling":
-            logger.info(f"Batch {batch_id} is cancelling, skipping item {item_index}")
+            logger.info(f"Batch {batch_id} is cancelling before item start, skip item={item_index}")
             return
 
         # Помечаем элемент как обрабатываемый
         item.status = "processing"
         item.started_at = datetime.now(timezone.utc)
         await session.commit()
+
+        request_id = str(uuid.uuid4())
+        try:
+            await billing.reserve(
+                user_id=str(batch.user_id),
+                request_id=request_id,
+                cost=1
+            )
+            logger.info(f"Reserved 1 token for item {item_id}, request_id={request_id}")
+        except BillingNoFunds:
+            logger.warning(f"Not enough funds for item {item_id}")
+            item.status = "failed"
+            item.error_message = "Not enough requests to process this item"
+            item.completed_at = datetime.now(timezone.utc)
+            batch.failed_count += 1
+            batch.processed_count += 1
+            batch.current_item_index = item_index + 1
+            await session.commit()
+
+            await _add_message_to_chat(
+                session=session,
+                chat_id=batch.chat_id,
+                user_id=batch.user_id,
+                role="assistant",
+                content=f"Недостаточно средств для обработки элемента {item_index + 1}/{batch.total_count}",
+                meta={"batch_item_error": True, "no_funds": True}
+            )
+            return
+        except Exception as e:
+            logger.error(f"Billing reserve failed for item {item_id}: {e}")
+            item.status = "failed"
+            item.error_message = f"Billing error: {str(e)}"
+            item.completed_at = datetime.now(timezone.utc)
+            batch.failed_count += 1
+            batch.processed_count += 1
+            batch.current_item_index = item_index + 1
+            await session.commit()
+
+            await _add_message_to_chat(
+                session=session,
+                chat_id=batch.chat_id,
+                user_id=batch.user_id,
+                role="assistant",
+                content=f"Ошибка биллинга при обработке элемента {item_index + 1}/{batch.total_count}: {str(e)}",
+                meta={"batch_item_error": True}
+            )
+            return
 
         try:
             # Создаем задачу в NanoBanana
@@ -196,7 +246,8 @@ async def process_batch_item(
                 chat_id=batch.chat_id,
                 user_id=batch.user_id,
                 batch_item_id=item.id,
-                billing_state="none"  # биллинг уже зарезервирован на уровне пакета
+                billing_request_id=request_id,
+                billing_state="reserved"
             )
             await session.merge(task)
 
@@ -220,10 +271,11 @@ async def process_batch_item(
             )
 
             # Ждем завершения задачи с активным опросом
-            max_wait = 300  # 5 минут
+            max_wait = settings.TIMEOUT_SECONDS
             poll_interval = settings.POLL_INTERVAL_SECONDS
             waited = 0
             task_completed = False
+            cancel_requested = False
 
             while waited < max_wait and not task_completed:
                 await asyncio.sleep(poll_interval)
@@ -236,13 +288,18 @@ async def process_batch_item(
                 if completed_item:
                     logger.info(f"Item {item_id} completed with status {completed_item.status}")
                     task_completed = True
+                    if completed_item.status == "success":
+                        batch.success_count += 1
+                    elif completed_item.status == "failed":
+                        batch.failed_count += 1
+                    await session.commit()
                     break
 
-                # Проверяем, не отменен ли пакет
+                # Если отмена запрошена — ЗАПОМИНАЕМ, но текущий элемент всё равно дожидаемся
                 await session.refresh(batch)
-                if batch.status == "cancelling":
-                    logger.info(f"Batch {batch_id} cancelled during item {item_index} processing")
-                    return
+                if batch.status == "cancelling" and not cancel_requested:
+                    cancel_requested = True
+                    logger.info(f"Batch {batch_id} cancel requested; will stop after current item (index={item_index})")
 
             # Если вышли по таймауту
             if not task_completed:
@@ -252,23 +309,37 @@ async def process_batch_item(
                 item.completed_at = datetime.now(timezone.utc)
                 batch.failed_count += 1
 
+                try:
+                    await billing.fail(
+                        user_id=str(batch.user_id),
+                        request_id=request_id,
+                        task_id=task_id,
+                        error="Timeout"
+                    )
+                    logger.info(f"Billing fail called for timed out item {item_id}")
+                except Exception as e:
+                    logger.error(f"Failed to cancel billing for timed out item {item_id}: {e}")
+
                 await _add_message_to_chat(
                     session=session,
                     chat_id=batch.chat_id,
                     user_id=batch.user_id,
                     role="assistant",
                     content=f"Таймаут при обработке элемента {item_index + 1}/{batch.total_count}",
-                    meta={"batch_item_error": True, "timeout": True}
+                    meta={"batch_item_error": True, "timeout": True},
+                    task_id=task_id
                 )
 
-            # Обновляем счетчики (если еще не обновлено через completed_item)
+            # Обновляем счетчики BatchJob
             await session.refresh(item)
             await session.refresh(batch)
 
             if item.status == "success":
-                batch.success_count = batch.success_count
+                # success_count уже должен быть обновлен через _update_task_status_from_callback
+                pass
             elif item.status == "failed":
-                batch.failed_count = batch.failed_count
+                # failed_count уже должен быть обновлен
+                pass
 
             batch.processed_count += 1
             batch.current_item_index = item_index + 1
@@ -276,6 +347,15 @@ async def process_batch_item(
 
         except Exception as e:
             logger.exception(f"Error processing batch item {item_id}: {e}")
+
+            try:
+                await billing.cancel(
+                    user_id=str(batch.user_id),
+                    request_id=request_id,
+                )
+                logger.info(f"Billing cancel called for failed item {item_id}")
+            except Exception as billing_error:
+                logger.error(f"Failed to cancel billing after error: {billing_error}")
 
             item.status = "failed"
             item.error_message = str(e)
@@ -293,6 +373,7 @@ async def process_batch_item(
                 content=f"Системная ошибка при обработке элемента {item_index + 1}/{batch.total_count}: {str(e)}",
                 meta={"batch_item_error": True}
             )
+            await session.commit()
 
 
 async def start_batch_processing(ctx, batch_id: str):
@@ -308,14 +389,18 @@ async def start_batch_processing(ctx, batch_id: str):
             logger.error(f"Batch {batch_id} not found")
             return
 
-        if batch.status != "pending":
-            logger.warning(f"Batch {batch_id} already started (status={batch.status})")
+        # atomic claim: pending -> processing
+        res = await session.execute(
+            update(BatchJob)
+            .where(BatchJob.id == batch_id, BatchJob.status == "pending")
+            .values(status="processing", started_at=datetime.now(timezone.utc))
+        )
+        await session.commit()
+        if res.rowcount == 0:
+            logger.warning(f"Batch {batch_id} already started or not pending (status={batch.status})")
             return
 
-        # Меняем статус на processing
-        batch.status = "processing"
-        batch.started_at = datetime.now(timezone.utc)
-        await session.commit()
+        await session.refresh(batch)
 
         # Получаем все элементы
         items = await session.execute(
@@ -355,21 +440,21 @@ async def start_batch_processing(ctx, batch_id: str):
         batch.completed_at = datetime.now(timezone.utc)
 
         # Добавляем финальное сообщение
-        summary = (
-            f"Пакетная обработка завершена.\n"
-            f"Всего: {batch.total_count}\n"
-            f"Успешно: {batch.success_count}\n"
-            f"Ошибок: {batch.failed_count}"
-        )
-
-        await _add_message_to_chat(
-            session=session,
-            chat_id=batch.chat_id,
-            user_id=batch.user_id,
-            role="assistant",
-            content=summary,
-            meta={"batch_complete": True, "batch_status": batch.status}
-        )
+        # summary = (
+        #     f"Пакетная обработка завершена.\n"
+        #     f"Всего: {batch.total_count}\n"
+        #     f"Успешно: {batch.success_count}\n"
+        #     f"Ошибок: {batch.failed_count}"
+        # )
+        #
+        # await _add_message_to_chat(
+        #     session=session,
+        #     chat_id=batch.chat_id,
+        #     user_id=batch.user_id,
+        #     role="assistant",
+        #     content=summary,
+        #     meta={"batch_complete": True, "batch_status": batch.status}
+        # )
 
         await session.commit()
         logger.info(f"Batch {batch_id} finished with status {batch.status}")

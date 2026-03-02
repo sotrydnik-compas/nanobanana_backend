@@ -18,7 +18,7 @@ class BatchJob(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(
         String(16),
         default="pending",
-        comment="pending|processing|completed|partial|cancelling|cancelled"
+        comment="pending|processing|completed|partial|cancelling|cancelled|failed"
     )
 
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -31,9 +31,6 @@ class BatchJob(Base, TimestampMixin):
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
 
     current_item_index: Mapped[int] = mapped_column(Integer, default=0)
-
-    billing_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    billing_state: Mapped[str] = mapped_column(String(16), default="none")
 
     # Для отслеживания прогресса
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

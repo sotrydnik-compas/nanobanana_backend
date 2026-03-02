@@ -1,6 +1,5 @@
-import uuid
-
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -25,19 +24,20 @@ billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOK
 async def validate_images(
         image_urls: Optional[List[str]] = None,
         images: Optional[List[UploadFile]] = None
-) -> tuple[List[str], List[str]]:
+) -> List[Dict[str, Any]]:
     """
     Валидация и сохранение изображений.
-    Возвращает (urls, local_files)
+    Возвращает список элементов пакета:
+      [{ "image_url": str, "local_file": Optional[str] }]
     """
-    urls = []
-    local_files = []
+    items: List[Dict[str, Any]] = []
 
     # Обрабатываем URL
     if image_urls:
         for url in image_urls:
-            if url and url.strip():
-                urls.append(url.strip())
+            u = (url or "").strip()
+            if u:
+                items.append({"image_url": u, "local_file": None})
 
     # Обрабатываем загруженные файлы
     if images:
@@ -49,13 +49,13 @@ async def validate_images(
             try:
                 # Сохраняем в подпапку batches для лучшей организации
                 path = await save_upload(img, max_bytes=max_bytes, subdir="batches")
-                local_files.append(path)
-                urls.append(f"{settings.PUBLIC_BASE_URL}/media/{path}")
+                public_url = f"{settings.PUBLIC_BASE_URL}/media/{path}"
+                items.append({"image_url": public_url, "local_file": path})
             except Exception as e:
                 logger.error(f"Error saving upload: {e}")
                 raise HTTPException(500, f"Failed to save file: {img.filename}")
 
-    return urls, local_files
+    return items
 
 
 @router.post("/generate-batch")
@@ -95,7 +95,7 @@ async def generate_batch(
 
     # Сохраняем и валидируем изображения
     try:
-        urls, local_files = await validate_images(image_urls, images)
+        items = await validate_images(image_urls, images)
     except HTTPException:
         raise
     except Exception as e:
@@ -103,7 +103,7 @@ async def generate_batch(
         raise HTTPException(500, "Error processing images")
 
     # Проверяем количество
-    total_images = len(urls)
+    total_images = len(items)
     if total_images == 0:
         raise HTTPException(400, "At least one image required")
     if total_images > 100:
@@ -133,17 +133,16 @@ async def generate_batch(
         await session.refresh(chat)
         chat_id = chat.id
 
-    # Резервируем средства в биллинге
-    request_id = str(uuid.uuid4())
-    cost = total_images  # стоимость = количество изображений
-
-    try:
-        await billing.reserve(user_id=user_id, request_id=request_id, cost=cost)
-    except BillingNoFunds:
-        raise HTTPException(402, f"Not enough requests (need {cost})")
-    except Exception as e:
-        logger.error(f"Billing reserve failed: {e}")
-        raise HTTPException(503, "Billing unavailable")
+    # TODO: Это не нужно, но тут нужна проверка, хватит ли на счете токенов что бы обработать cost.
+    # Проверяем средства в биллинге
+    # cost = total_images  # стоимость = количество изображений
+    # try:
+    #     await billing.reserve(user_id=user_id, request_id=request_id, cost=cost)
+    # except BillingNoFunds:
+    #     raise HTTPException(402, f"Not enough requests (need {cost})")
+    # except Exception as e:
+    #     logger.error(f"Billing reserve failed: {e}")
+    #     raise HTTPException(503, "Billing unavailable")
 
     # Создаем BatchJob
     batch = BatchJob(
@@ -153,22 +152,19 @@ async def generate_batch(
         resolution=resolution,
         aspect_ratio=aspectRatio,
         total_count=total_images,
-        billing_request_id=request_id,
-        billing_state="reserved"
     )
     session.add(batch)
     await session.commit()
     await session.refresh(batch)
 
     # Создаем BatchItem для каждого изображения
-    for idx, url in enumerate(urls):
-        local_file = local_files[idx] if idx < len(local_files) else None
+    for idx, it in enumerate(items):
 
         item = BatchItem(
             batch_id=batch.id,
             index=idx,
-            image_url=url,
-            local_file=local_file
+            image_url=it["image_url"],
+            local_file=it.get("local_file"),
         )
         session.add(item)
 
@@ -219,9 +215,11 @@ async def get_batch_status(
     items = await session.execute(
         select(BatchItem)
         .where(BatchItem.batch_id == batch_id)
-        .order_by(BatchItem.index)
+        .order_by(BatchItem.index.desc())
         .limit(20)
     )
+    recent = list(items.scalars().all())
+    recent.reverse()
 
     return {
         "batch_id": batch.id,
@@ -249,7 +247,7 @@ async def get_batch_status(
                 "error": item.error_message,
                 "completed_at": item.completed_at
             }
-            for item in items.scalars().all()
+            for item in recent
         ]
     }
 
@@ -318,19 +316,19 @@ async def cancel_batch(
     if batch.status not in ("pending", "processing"):
         raise HTTPException(400, f"Cannot cancel batch with status {batch.status}")
 
-    # Меняем статус на cancelling
+    # Если пакет ещё не стартовал — отменяем сразу
+    if batch.status == "pending":
+        batch.status = "cancelled"
+        batch.completed_at = datetime.now(timezone.utc)
+        await session.commit()
+        return {
+            "status": "cancelled",
+            "message": "Batch cancelled before processing started."
+        }
+
+    # processing -> просим остановить ПОСЛЕ текущего элемента
     batch.status = "cancelling"
     await session.commit()
-
-    # Возвращаем средства за необработанные
-    remaining = batch.total_count - batch.processed_count
-    if remaining > 0 and batch.billing_request_id:
-        try:
-            # В биллинге можно реализовать refund по request_id
-            # Пока просто логируем
-            logger.info(f"Need to refund {remaining} for batch {batch_id}")
-        except Exception as e:
-            logger.error(f"Refund failed: {e}")
 
     return {
         "status": "cancelling",
@@ -408,8 +406,6 @@ async def admin_get_batch_details(
         "success_count": batch.success_count,
         "failed_count": batch.failed_count,
         "current_item_index": batch.current_item_index,
-        "billing_request_id": batch.billing_request_id,
-        "billing_state": batch.billing_state,
         "created_at": batch.created_at,
         "started_at": batch.started_at,
         "completed_at": batch.completed_at
