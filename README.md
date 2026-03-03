@@ -1,67 +1,113 @@
-# NanoBanana (FastAPI + Nginx + Docker)
+# NanoBanana — микросервисный бекенд (FastAPI + Docker)
 
-Backend на **FastAPI** с проксированием через **nginx** и отдельным frontend (SPA), запускаемый через **Docker Compose**.
+Проект представляет собой бекенд на **FastAPI**, разбитый на три микросервиса:  
+- **auth** — аутентификация и управление пользователями  
+- **billing** — биллинг и тарифы  
+- **ai** — генерация изображений через внешний AI‑провайдер  
+
+Вся инфраструктура запускается через **Docker Compose**: каждый сервис в своём контейнере, общая БД **PostgreSQL** (отдельные базы), общий **Redis**, прокси‑сервер **nginx** для раздачи статики фронтенда и маршрутизации API.
 
 ---
 
-## 📦 Требования
+## 📋 Требования
 
 - Docker **24+**
 - Docker Compose **v2**
-- Свободный порт **80**
-- Собранный frontend (`dist/`)
+- Свободный порт **80** (на хосте)
+- **Node.js** и **npm** (только для сборки фронтенда)
 
 ---
 
 ## 📁 Структура проекта
 
-├── Dockerfile
-
-├── docker-compose.yml
-
-├── .env
-
-├── nginx/
-
-│ └── nginx.conf
-
-├── media/
-
-├── logs/
-
-└── backend (FastAPI код)
-
-Frontend **не копируется в контейнер**, а монтируется с хоста.
-
----
-
-## ⚙️ Переменные окружения (.env)
-
-Создайте файл `.env` в корне проекта:
-
-- API_KEY=CHANGE_ME_LONG_RANDOM
-- CORS_ORIGINS=*
-- PUBLIC_BASE_URL=https://your-domain-or-ip
-- NANOBANANA_API_KEY=your_api_key
----
-
-## 🖼 Frontend
-
-Frontend должен быть **собран заранее**.
-
-Пример пути, который используется в `docker-compose.yml` в nginx volumes:
-- /home/compas/VSCodeProjects/nanobanana/nanobanana/dist
+```
+.
+├── .env.prod                    # переменные окружения
+├── scripts/                     # вспомогательные скрипты
+│   ├── up.sh                    # билд docker compose и последующий up
+│   ├── down.sh                   # docker compose down
+│   ├── migrate_ai.sh             # запуск миграций AI‑сервиса
+│   ├── migrate_auth.sh           # запуск миграций Auth‑сервиса
+│   └── migrate_billing.sh        # запуск миграций Billing‑сервиса
+├── services/                    # исходный код микросервисов
+│   ├── ai/                       # AI‑сервис (FastAPI)
+│   ├── auth/                     # Auth‑сервис (FastAPI)
+│   └── billing/                  # Billing‑сервис (FastAPI)
+├── infra/                       # инфраструктура
+│   ├── docker-compose.yml       # оркестрация всех сервисов
+│   ├── nginx/
+│   │   └── nginx.conf             # конфигурация nginx
+│   └── postgres/
+│       └── create-dbs.sh          # скрипт для инициализации бд
+├── media/                         # общая папка для загруженных файлов
+├── logs/                          # логи сервисов
+└── frontend/                      # исходники фронтенда (отдельный репозиторий)
+    └── dist/                       # собранная статика (монтируется в nginx)
+```
 
 ---
 
 ## 🚀 Запуск проекта
 
+### 1. Сборка фронтенда
+
+Перейдите в директорию с фронтендом и выполните сборку:
+
 ```bash
-docker compose up --build -d
+cd ../nanobanana_frontend
+npm install
+npm run build   # создаст папку dist
 ```
 
-## 🌍 Доступные адреса
+Убедитесь, что путь к `dist` указан в `FRONTEND_DIST_PATH` в файле `.env`.
 
-- Frontend (SPA)	http://localhost/widget/
-- Backend API	http://localhost/api/
-- Media файлы	http://localhost/media/<filename>
+### 2. Запуск всех сервисов
+
+```bash
+./scripts/up.sh
+```
+
+Это эквивалентно `docker compose up --build -d`.
+
+### 3. Остановка
+
+```bash
+./scripts/down.sh
+```
+
+---
+
+## 🗄 Миграции баз данных
+
+Каждый сервис использует Alembic для управления схемой своей БД.
+
+```bash
+./scripts/migrate_auth.sh      # применить миграции auth
+./scripts/migrate_billing.sh   # применить миграции billing
+./scripts/migrate_ai.sh        # применить миграции ai
+```
+
+Все скрипты подключаются к соответствующему контейнеру и выполняют `alembic upgrade head`.
+
+---
+
+## 🌍 Доступные адреса (локально)
+
+| Компонент          | URL                          |
+|--------------------|------------------------------|
+| Frontend (SPA)     | http://localhost/widget/     |
+| Документация       | http://localhost/api/v1/ai/docs (аналогично для других сервисов) |
+
+---
+
+## 🐳 Особенности Docker‑сборки
+
+- Все сервисы используют общую сеть `backend` (создаётся автоматически).
+- **PostgreSQL** инициализируется скриптом из `./infra/postgres/init/`, создающим отдельные базы и пользователей для каждого сервиса.
+- **Redis** используется для хранения сессий, blacklist‑токенов, очередей (ARQ для AI).
+- **Nginx** выступает единой точкой входа:
+  - раздаёт статику фронта из папки `dist` (монтируется с хоста)
+  - проксирует запросы к соответствующим микросервисам по префиксам `/api/v1/auth`, `/api/v1/billing`, `/api/v1/ai`
+  - раздаёт медиафайлы из папки `media`
+
+---

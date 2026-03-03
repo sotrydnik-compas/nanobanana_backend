@@ -16,7 +16,7 @@ async def get_payments(
         page: int = Query(1, ge=1, description="Номер страницы"),
         page_size: int = Query(10, ge=1, le=100, description="Количество элементов на странице"),
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     # Вычисляем offset
     offset = (page - 1) * page_size
@@ -43,7 +43,7 @@ async def get_payments(
 async def get_payment(
         payment_id: str,
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     payment = await session.get(Payment, payment_id)
 
@@ -58,7 +58,7 @@ async def get_users_balances(
         page: int = Query(1, ge=1, description="Номер страницы"),
         page_size: int = Query(10, ge=1, le=100, description="Количество элементов на странице"),
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     # Вычисляем offset
     offset = (page - 1) * page_size
@@ -85,7 +85,7 @@ async def get_users_balances(
 async def get_user_balance(
         user_id: str,
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     balance = await session.get(UserBalance, user_id)
 
@@ -100,7 +100,7 @@ async def add_user_balance(
         user_id: str = Form(...),
         requests_amount: int = Form(...),
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     if requests_amount < 0:
         raise HTTPException(400, "requests_amount must be >= 0")
@@ -127,7 +127,7 @@ async def upd_user_balance(
         user_id: str = Form(...),
         requests_amount: int = Form(...),
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     if requests_amount < 0:
         raise HTTPException(400, "requests_amount must be >= 0")
