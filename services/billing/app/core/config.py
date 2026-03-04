@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     INTERNAL_TOKEN: str
 
     # Данные провайдера
+    PAYMENT_ENABLED: bool = False
     PAYMENT_PROVIDER: str = "tochka"
     CURRENCY: str = "RUB"
 

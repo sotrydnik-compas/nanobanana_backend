@@ -36,6 +36,10 @@ async def create_payment(
     session: AsyncSession = Depends(get_async_session),
     user=Depends(get_current_user),
 ):
+    if not settings.PAYMENT_ENABLED:
+        logger.warning("PAYMENT_ENABLED=False, пропускаем create_payment_operation")
+        raise HTTPException(400, "Payments are disabled")
+
     user_id = user["user_id"]
 
     try:
