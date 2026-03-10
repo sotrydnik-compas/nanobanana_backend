@@ -26,7 +26,7 @@ class TochkaClient:
             logger.warning("PAYMENT_ENABLED=False, пропускаем create_payment_operation")
             raise TochkaError("Payments are disabled")
 
-        url = f"{self.base_url}{self.api_prefix}/acquiring/v1.0/payments"
+        url = f"{self.base_url}{self.api_prefix}/acquiring/v1.0/payments_with_receipt"
 
         async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.post(url, json={"Data": data}, headers=self._headers())

@@ -18,7 +18,7 @@ router = APIRouter(tags=["payments"])
 
 
 def _to_amount_str(amount_minor: int) -> str:
-    q = (Decimal(amount_minor) / Decimal(100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    q = Decimal(amount_minor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return str(q)
 
 
@@ -41,6 +41,7 @@ async def create_payment(
         raise HTTPException(400, "Payments are disabled")
 
     user_id = user["user_id"]
+    user_email = user['email']
 
     try:
         pid = uuid.UUID(plan_id)
@@ -73,11 +74,21 @@ async def create_payment(
     purpose = f"NanoBanana: {plan.title}".strip()
     if len(purpose) > 140:
         purpose = purpose[:140]
+    name = f"Тариф: {plan.title}".strip()
 
     # paymentLinkId <= 45 — UUID платежа
     payment_link_id = str(p.id)
     if len(payment_link_id) > 45:
         payment_link_id = payment_link_id[:45]
+
+    client_data = {
+        "email": user_email,
+    }
+    items_data = [{
+        "name": name,
+        "amount": amount_str,
+        "quantity": "1",
+    },]
 
     data = {
         "customerCode": settings.TOCHKA_CUSTOMER_CODE,
@@ -85,9 +96,11 @@ async def create_payment(
         "purpose": purpose,
         # "redirectUrl": settings.TOCHKA_REDIRECT_URL,
         # "failRedirectUrl": settings.TOCHKA_FAIL_REDIRECT_URL,
+        # "merchantId": settings.TOCHKA_MERCHANT_ID,
         "paymentMode": settings.TOCHKA_PAYMENT_MODES,
-        "merchantId": settings.TOCHKA_MERCHANT_ID,
         "paymentLinkId": payment_link_id,
+        "Client": client_data,
+        "Items": items_data,
         "ttl": 15,
     }
 
