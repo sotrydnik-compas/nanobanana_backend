@@ -53,16 +53,13 @@ async def _get_db_session() -> AsyncSession:
 
 async def _create_nanobanana_task(
         prompt: str,
-        image_url: Optional[str],
+        image_urls: list[str],
         resolution: str,
         aspect_ratio: str,
         callback_url: str
 ) -> str:
-    """Создать задачу в NanoBanana для одного изображения"""
+    """Создать задачу в NanoBanana для одного элемента пакета"""
     client = NanoBananaClient()
-
-    # Формируем payload как в generate-pro, но с одним URL
-    image_urls = [image_url] if image_url else []
 
     payload = {
         "prompt": prompt,
@@ -140,6 +137,32 @@ async def _add_message_to_chat(
     )
     session.add(message)
     await touch_chat(session, chat_id)
+
+
+def _load_batch_common_refs(batch: BatchJob) -> list[str]:
+    """Загрузить общие референсы пакета из JSON"""
+    raw = batch.common_refs_json or "[]"
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        logger.warning(f"Failed to parse common refs for batch {batch.id}")
+        return []
+
+    if not isinstance(data, list):
+        return []
+
+    refs: list[str] = []
+    seen: set[str] = set()
+
+    for value in data:
+        ref = str(value or "").strip()
+        if not ref or ref in seen:
+            continue
+        refs.append(ref)
+        seen.add(ref)
+
+    return refs
 
 
 async def process_batch_item(
@@ -227,9 +250,29 @@ async def process_batch_item(
             if item.local_file:
                 image_url = f"{settings.PUBLIC_BASE_URL}/media/{item.local_file}"
 
+            common_refs = _load_batch_common_refs(batch)
+            image_urls: list[str] = []
+            seen: set[str] = set()
+
+            # Сначала добавляем общие референсы в исходном порядке
+            for ref in common_refs:
+                ref = (ref or "").strip()
+                if not ref:
+                    continue
+                if ref == image_url:
+                    continue
+                if ref in seen:
+                    continue
+                image_urls.append(ref)
+                seen.add(ref)
+
+            # Уникальное изображение текущей задачи всегда ставим последним
+            if image_url:
+                image_urls.append(image_url)
+
             task_id = await _create_nanobanana_task(
                 prompt=batch.prompt,
-                image_url=image_url,
+                image_urls=image_urls,
                 resolution=batch.resolution,
                 aspect_ratio=batch.aspect_ratio,
                 callback_url=callback_url
@@ -240,7 +283,7 @@ async def process_batch_item(
                 task_id=task_id,
                 status="running",
                 prompt=batch.prompt,
-                image_urls=json.dumps([image_url] if image_url else [], ensure_ascii=False),
+                image_urls=json.dumps(image_urls, ensure_ascii=False),
                 resolution=batch.resolution,
                 aspect_ratio=batch.aspect_ratio,
                 chat_id=batch.chat_id,
@@ -258,7 +301,8 @@ async def process_batch_item(
             meta = {
                 "batch": True,
                 "batch_item_index": item_index,
-                "image_url": image_url
+                "image_url": image_url,
+                "common_refs_count": len(common_refs)
             }
             await _add_message_to_chat(
                 session=session,

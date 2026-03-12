@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Query
@@ -23,7 +24,10 @@ billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOK
 
 async def validate_images(
         image_urls: Optional[List[str]] = None,
-        images: Optional[List[UploadFile]] = None
+        images: Optional[List[UploadFile]] = None,
+        *,
+        max_items: int,
+        kind: str,
 ) -> List[Dict[str, Any]]:
     """
     Валидация и сохранение изображений.
@@ -32,12 +36,19 @@ async def validate_images(
     """
     items: List[Dict[str, Any]] = []
 
+    def ensure_can_add() -> None:
+        if len(items) >= max_items:
+            raise HTTPException(400, f"Maximum {max_items} {kind} allowed")
+
     # Обрабатываем URL
     if image_urls:
         for url in image_urls:
             u = (url or "").strip()
-            if u:
-                items.append({"image_url": u, "local_file": None})
+            if not u:
+                continue
+
+            ensure_can_add()
+            items.append({"image_url": u, "local_file": None})
 
     # Обрабатываем загруженные файлы
     if images:
@@ -46,6 +57,7 @@ async def validate_images(
             if img.content_type not in ALLOWED_CT:
                 raise HTTPException(400, f"Unsupported file type: {img.content_type}")
 
+            ensure_can_add()
             try:
                 # Сохраняем в подпапку batches для лучшей организации
                 path = await save_upload(img, max_bytes=max_bytes, subdir="batches")
@@ -65,6 +77,8 @@ async def generate_batch(
         aspectRatio: str = Form("1:1", description="Соотношение сторон"),
         image_urls: Optional[List[str]] = Form(None, description="URL изображений"),
         images: Optional[List[UploadFile]] = File(None, description="Файлы изображений"),
+        reference_urls: Optional[List[str]] = Form(None, description="Общие URL-референсы"),
+        reference_images: Optional[List[UploadFile]] = File(None, description="Общие файлы-референсы"),
         chat_id: Optional[str] = Form(None, description="ID существующего чата"),
         session: AsyncSession = Depends(get_async_session),
         user_ctx: dict = Depends(get_current_user),
@@ -95,7 +109,18 @@ async def generate_batch(
 
     # Сохраняем и валидируем изображения
     try:
-        items = await validate_images(image_urls, images)
+        items = await validate_images(
+            image_urls,
+            images,
+            max_items=100,
+            kind="images"
+        )
+        common_ref_items = await validate_images(
+            reference_urls,
+            reference_images,
+            max_items=5,
+            kind="reference images"
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -106,8 +131,8 @@ async def generate_batch(
     total_images = len(items)
     if total_images == 0:
         raise HTTPException(400, "At least one image required")
-    if total_images > 100:
-        raise HTTPException(400, "Maximum 100 images per batch")
+
+    common_refs = [it["image_url"] for it in common_ref_items if it.get("image_url")]
 
     # Работа с чатом
     if chat_id:
@@ -133,7 +158,7 @@ async def generate_batch(
         await session.refresh(chat)
         chat_id = chat.id
 
-    # TODO: Это не нужно, но тут нужна проверка, хватит ли на счете токенов что бы обработать cost.
+    # Это не нужно, но тут возможно нужна проверка, хватит ли на счете токенов что бы обработать cost.
     # Проверяем средства в биллинге
     # cost = total_images  # стоимость = количество изображений
     # try:
@@ -151,6 +176,7 @@ async def generate_batch(
         prompt=prompt,
         resolution=resolution,
         aspect_ratio=aspectRatio,
+        common_refs_json=json.dumps(common_refs, ensure_ascii=False),
         total_count=total_images,
     )
     session.add(batch)
@@ -179,7 +205,8 @@ async def generate_batch(
     meta = {
         "batch": True,
         "batch_id": batch.id,
-        "total_images": total_images
+        "total_images": total_images,
+        "common_refs_count": len(common_refs)
     }
     await add_user_message(
         session=session,
@@ -194,6 +221,7 @@ async def generate_batch(
         "batch_id": batch.id,
         "chat_id": chat_id,
         "total_images": total_images,
+        "common_refs_count": len(common_refs),
         "status": "pending"
     }
 
@@ -236,6 +264,7 @@ async def get_batch_status(
         "prompt": batch.prompt,
         "resolution": batch.resolution,
         "aspect_ratio": batch.aspect_ratio,
+        "common_refs_count": len(json.loads(batch.common_refs_json or "[]")),
         "created_at": batch.created_at,
         "started_at": batch.started_at,
         "completed_at": batch.completed_at,
@@ -289,6 +318,7 @@ async def list_batches(
                 "processed": b.processed_count,
                 "success": b.success_count,
                 "failed": b.failed_count,
+                "common_refs_count": len(json.loads(b.common_refs_json or "[]")),
                 "created_at": b.created_at,
                 "completed_at": b.completed_at
             }
@@ -369,6 +399,7 @@ async def admin_list_all_batches(
                 "processed": b.processed_count,
                 "success": b.success_count,
                 "failed": b.failed_count,
+                "common_refs_count": len(json.loads(b.common_refs_json or "[]")),
                 "created_at": b.created_at,
                 "started_at": b.started_at,
                 "completed_at": b.completed_at
@@ -401,6 +432,8 @@ async def admin_get_batch_details(
         "prompt": batch.prompt,
         "resolution": batch.resolution,
         "aspect_ratio": batch.aspect_ratio,
+        "common_refs": json.loads(batch.common_refs_json or "[]"),
+        "common_refs_count": len(json.loads(batch.common_refs_json or "[]")),
         "total_count": batch.total_count,
         "processed_count": batch.processed_count,
         "success_count": batch.success_count,
