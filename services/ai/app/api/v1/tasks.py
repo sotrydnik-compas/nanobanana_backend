@@ -68,6 +68,39 @@ async def _reconcile_failed(t: Task) -> None:
         logger.error(f"[billing] reconcile fail/refund failed task={t.task_id}: {e}")
 
 
+def _prepend_chat_result_reference(
+    image_urls: list[str],
+    last_url: Optional[str],
+    limit: int,
+) -> list[str]:
+    """
+    Ставит последнее успешное изображение из чата в начало списка референсов.
+    Если лимит превышен, обрезает хвост пользовательских референсов.
+    Дубликат last_url повторно не добавляет.
+    """
+    if limit <= 0:
+        return []
+
+    result: list[str] = []
+
+    if last_url:
+        last_url = last_url.strip()
+        if last_url:
+            result.append(last_url)
+
+    for url in image_urls:
+        u = (url or "").strip()
+        if not u:
+            continue
+        if last_url and u == last_url:
+            continue
+        result.append(u)
+        if len(result) >= limit:
+            break
+
+    return result
+
+
 async def _get_task_status(task: Task, session: AsyncSession) -> dict:
     """
     Внутренняя функция для получения статуса задачи.
@@ -235,11 +268,13 @@ async def generate_pro(
         if chat.status == "closed":
             raise HTTPException(status_code=400, detail="Chat is closed")
 
-        # auto-reference: если юзер не передал картинку — берём последнюю успешную из чата
-        if not image_urls and not uploads:
-            last_url = await get_last_success_result_url(session, chat_id)
-            if last_url:
-                image_urls.append(last_url)
+        # auto-reference
+        last_url = await get_last_success_result_url(session, chat_id)
+        image_urls = _prepend_chat_result_reference(
+            image_urls=image_urls,
+            last_url=last_url,
+            limit=settings.MAX_IMAGE_URLS,
+        )
 
     else:
         chat = Chat(title=make_chat_title(prompt), user_id=user_id)
