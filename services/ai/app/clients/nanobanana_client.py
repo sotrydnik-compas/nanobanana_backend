@@ -10,7 +10,7 @@ class NanoBananaClient:
         }
 
     def generate_pro(self, payload: dict) -> dict:
-        r = requests.post(f"{self.base_url}/generate-pro", headers=self.headers, json=payload, timeout=60)
+        r = requests.post(f"{self.base_url}/generate-2", headers=self.headers, json=payload, timeout=60)
         r.raise_for_status()
         return r.json()
 

@@ -34,7 +34,7 @@ async def admin_create_user(
         is_active: bool = Form(True),
         email_verified: bool = Form(False),
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     """
     Создание пользователя администратором.
@@ -86,7 +86,7 @@ async def admin_update_user(
         is_active: Optional[bool] = Form(None),
         email_verified: Optional[bool] = Form(None),
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     """
     Редактирование пользователя администратором.
@@ -147,7 +147,7 @@ async def admin_list_users(
         is_active: Optional[bool] = Query(None, description="Filter by active status"),
         email_verified: Optional[bool] = Query(None, description="Filter by email verification"),
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     """
     Получение списка всех пользователей с пагинацией и фильтрацией.
@@ -208,7 +208,7 @@ async def admin_list_users(
 async def admin_get_user(
         user_id: str,
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     """
     Получение пользователя по ID.
@@ -242,7 +242,7 @@ async def admin_get_user(
 async def admin_logout_user_all_sessions(
         user_id: str,
         session: AsyncSession = Depends(get_async_session),
-        # _: dict = Depends(require_admin),
+        _: dict = Depends(require_admin),
 ):
     """
     Завершение всех сессий пользователя.
@@ -273,7 +273,7 @@ async def admin_delete_user(
         user_id: str,
         permanent: bool = Query(False, description="Permanently delete user (cannot be undone)"),
         session: AsyncSession = Depends(get_async_session),
-        # user: dict = Depends(require_admin),
+        user: dict = Depends(require_admin),
 ):
     """
     Удаление или деактивация пользователя.

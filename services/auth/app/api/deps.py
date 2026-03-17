@@ -1,6 +1,5 @@
 from fastapi import Header, HTTPException, status, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.core.security import safe_decode_token
 from app.database.session import get_async_session
@@ -49,6 +48,6 @@ def _is_admin_role(role: str | None) -> bool:
 
 
 async def require_admin(user=Depends(get_current_user)):
-    if not _is_admin_role(user.get("role")):
+    if not _is_admin_role(getattr(user, "role", None)):
         raise HTTPException(status_code=403, detail="Admin only")
     return user

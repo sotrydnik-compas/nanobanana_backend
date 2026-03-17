@@ -32,8 +32,10 @@ async def nanobanana_callback(
         code = payload.get("code")
         data = payload.get("data") or {}
         task_id = data.get("taskId")
-        info = (data.get("info") or {})
-        result_image_url = info.get("resultImageUrl")
+        response = (data.get("response") or {})
+        result_image_url = response.get("resultImageUrl")
+        # info = (data.get("info") or {})
+        # result_image_url = info.get("resultImageUrl")
 
         t = await session.get(Task, task_id) if task_id else None
         if not t:

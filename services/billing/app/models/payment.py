@@ -1,6 +1,5 @@
 import uuid
-from datetime import datetime
-from sqlalchemy import String, Integer, DateTime, func, ForeignKey
+from sqlalchemy import String, Integer, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +17,8 @@ class Payment(Base, TimestampMixin):
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="dummy")
     provider_payment_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")  # pending/succeeded/failed/canceled
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
+    )  # pending/succeeded/failed/canceled
     amount_minor: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="RUB")

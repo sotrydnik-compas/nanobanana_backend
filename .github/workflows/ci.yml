@@ -36,6 +36,7 @@ jobs:
         working-directory: services/${{ matrix.service }}
         run: |
           poetry run ruff check .
+          poetry run ruff format --check .
 
       - name: Pytest
         working-directory: services/${{ matrix.service }}

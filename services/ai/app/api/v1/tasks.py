@@ -201,14 +201,11 @@ async def generate_pro(
     request: Request,
     session: AsyncSession = Depends(get_async_session),
     user_ctx: dict = Depends(get_current_user),
-
     prompt: str = Form(...),
     resolution: str = Form("1K"),
     aspectRatio: str = Form("1:1"),
-
     imageUrls: Optional[List[str]] = Form(default=None),
     images: Optional[List[UploadFile]] = File(default=None),
-
     chat_id: Optional[str] = Form(default=None),
 ):
     limit_generate(request)
@@ -300,12 +297,14 @@ async def generate_pro(
         "resolution": resolution,
         "aspectRatio": aspectRatio,
         "callBackUrl": f"{settings.PUBLIC_BASE_URL}/api/v1/ai/nanobanana/callback",
+        "googleSearch": True,
+        "outputFormat": "png",
     }
 
     # зовём nanobanana (в thread)
     try:
         res = await anyio.to_thread.run_sync(client.generate_pro, data)
-    except Exception as e:
+    except Exception:
         # обязательный cancel, потому что task_id не получен
         try:
             await billing.cancel(user_id=str(user_id), request_id=request_id)

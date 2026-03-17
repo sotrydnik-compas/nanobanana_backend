@@ -21,11 +21,11 @@ router = APIRouter(tags=["admin"])
 
 @router.get("/admin/prompts/templates")
 async def admin_list_templates(
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
-        limit: int = Query(50, ge=1, le=100),
-        offset: int = Query(0, ge=0),
-        is_active: Optional[bool] = Query(None),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    is_active: Optional[bool] = Query(None),
 ):
     """
     Получить список всех шаблонов промптов
@@ -58,39 +58,33 @@ async def admin_list_templates(
                 "is_active": t.is_active,
                 "created_at": t.created_at,
                 "updated_at": t.updated_at,
-                "variants_count": len(t.variants)
+                "variants_count": len(t.variants),
             }
             for t in templates
         ],
         "total": total,
         "limit": limit,
-        "offset": offset
+        "offset": offset,
     }
 
 
 @router.post("/admin/prompts/templates")
 async def admin_create_template(
-        name: str = Form(..., description="Уникальное имя шаблона"),
-        template_text: str = Form(..., description="Текст шаблона с плейсхолдерами в {фигурных_скобках}"),
-        is_active: bool = Form(True),
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    name: str = Form(..., description="Уникальное имя шаблона"),
+    template_text: str = Form(..., description="Текст шаблона с плейсхолдерами в {фигурных_скобках}"),
+    is_active: bool = Form(True),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Создать новый шаблон промпта
     """
     # Проверка уникальности имени
-    existing = await session.execute(
-        select(PromptTemplate).where(PromptTemplate.name == name)
-    )
+    existing = await session.execute(select(PromptTemplate).where(PromptTemplate.name == name))
     if existing.scalar_one_or_none():
         raise HTTPException(400, f"Template with name '{name}' already exists")
 
-    template = PromptTemplate(
-        name=name,
-        template_text=template_text,
-        is_active=is_active
-    )
+    template = PromptTemplate(name=name, template_text=template_text, is_active=is_active)
     session.add(template)
 
     try:
@@ -106,15 +100,15 @@ async def admin_create_template(
         "template_text": template.template_text,
         "is_active": template.is_active,
         "created_at": template.created_at,
-        "updated_at": template.updated_at
+        "updated_at": template.updated_at,
     }
 
 
 @router.get("/admin/prompts/templates/{template_id}")
 async def admin_get_template(
-        template_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    template_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Получить шаблон по ID с вариантами
@@ -146,21 +140,21 @@ async def admin_get_template(
                 "sort_order": v.sort_order,
                 "is_active": v.is_active,
                 "created_at": v.created_at,
-                "updated_at": v.updated_at
+                "updated_at": v.updated_at,
             }
             for v in variants
-        ]
+        ],
     }
 
 
 @router.patch("/admin/prompts/templates/{template_id}")
 async def admin_update_template(
-        template_id: str,
-        name: Optional[str] = Form(None),
-        template_text: Optional[str] = Form(None),
-        is_active: Optional[bool] = Form(None),
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    template_id: str,
+    name: Optional[str] = Form(None),
+    template_text: Optional[str] = Form(None),
+    is_active: Optional[bool] = Form(None),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Обновить шаблон промпта
@@ -173,10 +167,7 @@ async def admin_update_template(
         # Проверка уникальности нового имени
         if name != template.name:
             existing = await session.execute(
-                select(PromptTemplate).where(
-                    PromptTemplate.name == name,
-                    PromptTemplate.id != template_id
-                )
+                select(PromptTemplate).where(PromptTemplate.name == name, PromptTemplate.id != template_id)
             )
             if existing.scalar_one_or_none():
                 raise HTTPException(400, f"Template with name '{name}' already exists")
@@ -201,15 +192,15 @@ async def admin_update_template(
         "template_text": template.template_text,
         "is_active": template.is_active,
         "created_at": template.created_at,
-        "updated_at": template.updated_at
+        "updated_at": template.updated_at,
     }
 
 
 @router.delete("/admin/prompts/templates/{template_id}")
 async def admin_delete_template(
-        template_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    template_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Удалить шаблон промпта (каскадно удалит и все варианты)
@@ -226,10 +217,10 @@ async def admin_delete_template(
 
 @router.get("/admin/prompts/templates/{template_id}/variants")
 async def admin_list_variants(
-        template_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
-        is_active: Optional[bool] = Query(None),
+    template_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
+    is_active: Optional[bool] = Query(None),
 ):
     """
     Получить список вариантов для шаблона
@@ -258,7 +249,7 @@ async def admin_list_variants(
                 "sort_order": v.sort_order,
                 "is_active": v.is_active,
                 "created_at": v.created_at,
-                "updated_at": v.updated_at
+                "updated_at": v.updated_at,
             }
             for v in variants
         ]
@@ -267,13 +258,13 @@ async def admin_list_variants(
 
 @router.post("/admin/prompts/templates/{template_id}/variants")
 async def admin_create_variant(
-        template_id: str,
-        key: str = Form(..., description="Уникальный ключ варианта (например: 'ugc', 'image', 'studio')"),
-        label: str = Form(..., description="Текст для подстановки"),
-        sort_order: int = Form(0),
-        is_active: bool = Form(True),
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    template_id: str,
+    key: str = Form(..., description="Уникальный ключ варианта (например: 'ugc', 'image', 'studio')"),
+    label: str = Form(..., description="Текст для подстановки"),
+    sort_order: int = Form(0),
+    is_active: bool = Form(True),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Создать новый вариант для шаблона
@@ -284,11 +275,7 @@ async def admin_create_variant(
         raise HTTPException(404, "Template not found")
 
     variant = PromptVariant(
-        template_id=template_id,
-        key=key,
-        label=label,
-        sort_order=sort_order,
-        is_active=is_active
+        template_id=template_id, key=key, label=label, sort_order=sort_order, is_active=is_active
     )
     session.add(variant)
 
@@ -306,19 +293,19 @@ async def admin_create_variant(
         "sort_order": variant.sort_order,
         "is_active": variant.is_active,
         "created_at": variant.created_at,
-        "updated_at": variant.updated_at
+        "updated_at": variant.updated_at,
     }
 
 
 @router.patch("/admin/prompts/variants/{variant_id}")
 async def admin_update_variant(
-        variant_id: str,
-        key: Optional[str] = Form(None),
-        label: Optional[str] = Form(None),
-        sort_order: Optional[int] = Form(None),
-        is_active: Optional[bool] = Form(None),
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    variant_id: str,
+    key: Optional[str] = Form(None),
+    label: Optional[str] = Form(None),
+    sort_order: Optional[int] = Form(None),
+    is_active: Optional[bool] = Form(None),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Обновить вариант
@@ -334,7 +321,7 @@ async def admin_update_variant(
                 select(PromptVariant).where(
                     PromptVariant.template_id == variant.template_id,
                     PromptVariant.key == key,
-                    PromptVariant.id != variant_id
+                    PromptVariant.id != variant_id,
                 )
             )
             if existing.scalar_one_or_none():
@@ -364,15 +351,15 @@ async def admin_update_variant(
         "sort_order": variant.sort_order,
         "is_active": variant.is_active,
         "created_at": variant.created_at,
-        "updated_at": variant.updated_at
+        "updated_at": variant.updated_at,
     }
 
 
 @router.delete("/admin/prompts/variants/{variant_id}")
 async def admin_delete_variant(
-        variant_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    variant_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Удалить вариант
@@ -389,10 +376,10 @@ async def admin_delete_variant(
 
 @router.get("/admin/samples")
 async def get_samples(
-        page: int = Query(1, ge=1, description="Номер страницы"),
-        page_size: int = Query(10, ge=1, le=100, description="Количество элементов на странице"),
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    page: int = Query(1, ge=1, description="Номер страницы"),
+    page_size: int = Query(10, ge=1, le=100, description="Количество элементов на странице"),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Возвращает список изображений с пагинацией.
@@ -412,35 +399,37 @@ async def get_samples(
     samples = result.scalars().all()
 
     # Формируем полные URL для изображений
-    base_url = f"/media"
+    base_url = "/media"
     samples_data = []
     for sample in samples:
         if sample.path:
             # Формируем полный путь к изображению
             image_url = f"{base_url}/{sample.path}"
-            samples_data.append({
-                "id": sample.id,
-                "path": sample.path,
-                "url": image_url,
-                "is_active": sample.is_active,
-                "created_at": sample.created_at.isoformat() if sample.created_at else None,
-                "updated_at": sample.updated_at.isoformat() if sample.updated_at else None
-            })
+            samples_data.append(
+                {
+                    "id": sample.id,
+                    "path": sample.path,
+                    "url": image_url,
+                    "is_active": sample.is_active,
+                    "created_at": sample.created_at.isoformat() if sample.created_at else None,
+                    "updated_at": sample.updated_at.isoformat() if sample.updated_at else None,
+                }
+            )
 
     return {
         "items": samples_data,
         "total": total_count,
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size
+        "total_pages": (total_count + page_size - 1) // page_size,
     }
 
 
 @router.post("/admin/samples")
 async def admin_upload_samples(
-        files: List[UploadFile] = File(..., description="Изображения для загрузки (JPEG, PNG, WEBP)"),
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    files: List[UploadFile] = File(..., description="Изображения для загрузки (JPEG, PNG, WEBP)"),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Загружает одно или несколько изображений в папку media/samples
@@ -489,28 +478,27 @@ async def admin_upload_samples(
         raise HTTPException(500, detail=f"Database error: {str(e)}")
 
     # Формируем ответ
-    base_url = f"/media"
+    base_url = "/media"
     result = []
     for sample in created_samples:
-        result.append({
-            "id": sample.id,
-            "path": sample.path,
-            "url": f"{base_url}/{sample.path}",
-            "created_at": sample.created_at.isoformat() if sample.created_at else None
-        })
+        result.append(
+            {
+                "id": sample.id,
+                "path": sample.path,
+                "url": f"{base_url}/{sample.path}",
+                "created_at": sample.created_at.isoformat() if sample.created_at else None,
+            }
+        )
 
-    return {
-        "message": f"Successfully uploaded {len(result)} file(s)",
-        "samples": result
-    }
+    return {"message": f"Successfully uploaded {len(result)} file(s)", "samples": result}
 
 
 @router.patch("/admin/samples/{sample_id}")
 async def admin_update_sample(
-        sample_id: str,
-        is_active: bool = Form(...),
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    sample_id: str,
+    is_active: bool = Form(...),
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Активировать/деактивировать семпл
@@ -527,9 +515,9 @@ async def admin_update_sample(
 
 @router.delete("/admin/samples/{sample_id}")
 async def admin_delete_sample(
-        sample_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
+    sample_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
 ):
     """
     Удалить семпл (и файл, и запись в БД)

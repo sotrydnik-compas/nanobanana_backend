@@ -1,5 +1,5 @@
 from uuid import uuid4
-from sqlalchemy import Text, String, DateTime
+from sqlalchemy import String, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 

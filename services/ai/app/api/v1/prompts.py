@@ -24,7 +24,7 @@ async def render_prompt(
     template_result = await session.execute(
         select(PromptTemplate).where(
             PromptTemplate.name == template_name,
-            PromptTemplate.is_active == True
+            PromptTemplate.is_active.is_(True),
         )
     )
     template = template_result.scalar_one_or_none()
@@ -36,19 +36,19 @@ async def render_prompt(
         select(PromptVariant).where(
             PromptVariant.template_id == template.id,
             PromptVariant.key == variant_key,
-            PromptVariant.is_active == True
+            PromptVariant.is_active.is_(True),
         )
     )
     variant = variant_result.scalar_one_or_none()
     if not variant:
-        raise HTTPException(404, f"Active variant with key '{variant_key}' not found for template '{template_name}'")
+        raise HTTPException(
+            404, f"Active variant with key '{variant_key}' not found for template '{template_name}'"
+        )
 
     # Формируем промпт
     try:
         prompt = template.template_text.format(
-            variant_label=variant.label,
-            title=title.strip(),
-            advantage=advantage.strip()
+            variant_label=variant.label, title=title.strip(), advantage=advantage.strip()
         )
     except KeyError as e:
         raise HTTPException(500, f"Template contains invalid placeholder: {e}")
@@ -59,7 +59,7 @@ async def render_prompt(
         "prompt": prompt,
         "template_name": template.name,
         "variant_key": variant.key,
-        "variant_label": variant.label
+        "variant_label": variant.label,
     }
 
 
@@ -75,7 +75,7 @@ async def get_template_variants(
     template_result = await session.execute(
         select(PromptTemplate).where(
             PromptTemplate.name == template_name,
-            PromptTemplate.is_active == True
+            PromptTemplate.is_active.is_(True),
         )
     )
     template = template_result.scalar_one_or_none()
@@ -85,24 +85,14 @@ async def get_template_variants(
     # Получаем активные варианты
     variants_result = await session.execute(
         select(PromptVariant)
-        .where(
-            PromptVariant.template_id == template.id,
-            PromptVariant.is_active == True
-        )
+        .where(PromptVariant.template_id == template.id, PromptVariant.is_active.is_(True))
         .order_by(PromptVariant.sort_order)
     )
     variants = variants_result.scalars().all()
 
     return {
         "template_name": template.name,
-        "variants": [
-            {
-                "key": v.key,
-                "label": v.label,
-                "sort_order": v.sort_order
-            }
-            for v in variants
-        ]
+        "variants": [{"key": v.key, "label": v.label, "sort_order": v.sort_order} for v in variants],
     }
 
 
@@ -118,31 +108,18 @@ async def get_template_with_variants(
     template_result = await session.execute(
         select(PromptTemplate)
         .options(selectinload(PromptTemplate.variants))
-        .where(
-            PromptTemplate.name == template_name,
-            PromptTemplate.is_active == True
-        )
+        .where(PromptTemplate.name == template_name, PromptTemplate.is_active.is_(True))
     )
     template = template_result.scalar_one_or_none()
     if not template:
         raise HTTPException(404, f"Active template with name '{template_name}' not found")
 
     # Фильтруем только активные варианты и сортируем
-    active_variants = [
-        v for v in template.variants
-        if v.is_active
-    ]
+    active_variants = [v for v in template.variants if v.is_active]
     active_variants.sort(key=lambda x: x.sort_order)
 
     return {
         "template_name": template.name,
         "template_text": template.template_text,
-        "variants": [
-            {
-                "key": v.key,
-                "label": v.label,
-                "sort_order": v.sort_order
-            }
-            for v in active_variants
-        ]
+        "variants": [{"key": v.key, "label": v.label, "sort_order": v.sort_order} for v in active_variants],
     }

@@ -16,6 +16,9 @@ build/
 .mypy_cache/
 .ruff_cache/
 
+# alembic migrations (per-service)
+services/*/alembic/versions/
+
 # spa
 nanobanana_frontend/
 

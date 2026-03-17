@@ -1,6 +1,5 @@
 import hashlib
 import secrets
-from datetime import timedelta
 
 from app.core.config import settings
 from app.services.redis_client import get_redis

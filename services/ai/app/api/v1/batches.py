@@ -11,11 +11,11 @@ from app.core.config import settings
 from app.core.logger import logger
 from app.services.uploads import save_upload, ALLOWED_CT
 from app.services.titles import make_chat_title
-from app.clients.billing_client import BillingClient, BillingNoFunds
+from app.clients.billing_client import BillingClient
 
 from app.models.batch import BatchJob, BatchItem
 from app.models.chat import Chat
-from app.services.arq_queue import get_arq_pool, start_batch_processing
+from app.services.arq_queue import get_arq_pool
 
 router = APIRouter(tags=["batches"])
 
@@ -23,11 +23,11 @@ billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOK
 
 
 async def validate_images(
-        image_urls: Optional[List[str]] = None,
-        images: Optional[List[UploadFile]] = None,
-        *,
-        max_items: int,
-        kind: str,
+    image_urls: Optional[List[str]] = None,
+    images: Optional[List[UploadFile]] = None,
+    *,
+    max_items: int,
+    kind: str,
 ) -> List[Dict[str, Any]]:
     """
     Валидация и сохранение изображений.
@@ -72,16 +72,16 @@ async def validate_images(
 
 @router.post("/generate-batch")
 async def generate_batch(
-        prompt: str = Form(..., description="Промт для генерации"),
-        resolution: str = Form("1K", description="Разрешение: 1K, 2K, 4K"),
-        aspectRatio: str = Form("1:1", description="Соотношение сторон"),
-        image_urls: Optional[List[str]] = Form(None, description="URL изображений"),
-        images: Optional[List[UploadFile]] = File(None, description="Файлы изображений"),
-        reference_urls: Optional[List[str]] = Form(None, description="Общие URL-референсы"),
-        reference_images: Optional[List[UploadFile]] = File(None, description="Общие файлы-референсы"),
-        chat_id: Optional[str] = Form(None, description="ID существующего чата"),
-        session: AsyncSession = Depends(get_async_session),
-        user_ctx: dict = Depends(get_current_user),
+    prompt: str = Form(..., description="Промт для генерации"),
+    resolution: str = Form("1K", description="Разрешение: 1K, 2K, 4K"),
+    aspectRatio: str = Form("1:1", description="Соотношение сторон"),
+    image_urls: Optional[List[str]] = Form(None, description="URL изображений"),
+    images: Optional[List[UploadFile]] = File(None, description="Файлы изображений"),
+    reference_urls: Optional[List[str]] = Form(None, description="Общие URL-референсы"),
+    reference_images: Optional[List[UploadFile]] = File(None, description="Общие файлы-референсы"),
+    chat_id: Optional[str] = Form(None, description="ID существующего чата"),
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
 ):
     """
     Создать пакетную задачу на генерацию.
@@ -109,17 +109,9 @@ async def generate_batch(
 
     # Сохраняем и валидируем изображения
     try:
-        items = await validate_images(
-            image_urls,
-            images,
-            max_items=100,
-            kind="images"
-        )
+        items = await validate_images(image_urls, images, max_items=100, kind="images")
         common_ref_items = await validate_images(
-            reference_urls,
-            reference_images,
-            max_items=5,
-            kind="reference images"
+            reference_urls, reference_images, max_items=5, kind="reference images"
         )
     except HTTPException:
         raise
@@ -148,11 +140,7 @@ async def generate_batch(
         if chat.status == "closed":
             raise HTTPException(400, "Chat is closed")
     else:
-        chat = Chat(
-            title=make_chat_title(prompt),
-            user_id=user_id,
-            status="active"
-        )
+        chat = Chat(title=make_chat_title(prompt), user_id=user_id, status="active")
         session.add(chat)
         await session.commit()
         await session.refresh(chat)
@@ -185,7 +173,6 @@ async def generate_batch(
 
     # Создаем BatchItem для каждого изображения
     for idx, it in enumerate(items):
-
         item = BatchItem(
             batch_id=batch.id,
             index=idx,
@@ -202,18 +189,19 @@ async def generate_batch(
 
     # Добавляем первое сообщение в чат о начале пакета
     from app.services.history import add_user_message
+
     meta = {
         "batch": True,
         "batch_id": batch.id,
         "total_images": total_images,
-        "common_refs_count": len(common_refs)
+        "common_refs_count": len(common_refs),
     }
     await add_user_message(
         session=session,
         chat_id=chat_id,
         task_id="",  # нет единого task_id для всего пакета
         prompt=f"[ПАКЕТ] {prompt}",
-        meta=meta
+        meta=meta,
     )
     await session.commit()
 
@@ -222,15 +210,15 @@ async def generate_batch(
         "chat_id": chat_id,
         "total_images": total_images,
         "common_refs_count": len(common_refs),
-        "status": "pending"
+        "status": "pending",
     }
 
 
 @router.get("/batches/{batch_id}")
 async def get_batch_status(
-        batch_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        user_ctx: dict = Depends(get_current_user),
+    batch_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
 ):
     """Получить статус пакетной задачи"""
     user_id = user_ctx.get("user_id")
@@ -241,10 +229,7 @@ async def get_batch_status(
 
     # Получаем последние 20 элементов для отображения
     items = await session.execute(
-        select(BatchItem)
-        .where(BatchItem.batch_id == batch_id)
-        .order_by(BatchItem.index.desc())
-        .limit(20)
+        select(BatchItem).where(BatchItem.batch_id == batch_id).order_by(BatchItem.index.desc()).limit(20)
     )
     recent = list(items.scalars().all())
     recent.reverse()
@@ -259,7 +244,9 @@ async def get_batch_status(
             "success": batch.success_count,
             "failed": batch.failed_count,
             "current_index": batch.current_item_index,
-            "percent": round(batch.processed_count / batch.total_count * 100, 1) if batch.total_count > 0 else 0
+            "percent": round(batch.processed_count / batch.total_count * 100, 1)
+            if batch.total_count > 0
+            else 0,
         },
         "prompt": batch.prompt,
         "resolution": batch.resolution,
@@ -274,20 +261,20 @@ async def get_batch_status(
                 "status": item.status,
                 "result_url": item.result_image_url,
                 "error": item.error_message,
-                "completed_at": item.completed_at
+                "completed_at": item.completed_at,
             }
             for item in recent
-        ]
+        ],
     }
 
 
 @router.get("/batches")
 async def list_batches(
-        session: AsyncSession = Depends(get_async_session),
-        user_ctx: dict = Depends(get_current_user),
-        limit: int = Query(20, ge=1, le=100),
-        offset: int = Query(0, ge=0),
-        status: Optional[str] = Query(None, description="Фильтр по статусу")
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = Query(None, description="Фильтр по статусу"),
 ):
     """Список пакетных задач пользователя"""
     user_id = user_ctx.get("user_id")
@@ -320,21 +307,21 @@ async def list_batches(
                 "failed": b.failed_count,
                 "common_refs_count": len(json.loads(b.common_refs_json or "[]")),
                 "created_at": b.created_at,
-                "completed_at": b.completed_at
+                "completed_at": b.completed_at,
             }
             for b in batches
         ],
         "total": total,
         "limit": limit,
-        "offset": offset
+        "offset": offset,
     }
 
 
 @router.post("/batches/{batch_id}/cancel")
 async def cancel_batch(
-        batch_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        user_ctx: dict = Depends(get_current_user),
+    batch_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    user_ctx: dict = Depends(get_current_user),
 ):
     """Отменить пакетную обработку"""
     user_id = user_ctx.get("user_id")
@@ -351,10 +338,7 @@ async def cancel_batch(
         batch.status = "cancelled"
         batch.completed_at = datetime.now(timezone.utc)
         await session.commit()
-        return {
-            "status": "cancelled",
-            "message": "Batch cancelled before processing started."
-        }
+        return {"status": "cancelled", "message": "Batch cancelled before processing started."}
 
     # processing -> просим остановить ПОСЛЕ текущего элемента
     batch.status = "cancelling"
@@ -362,18 +346,18 @@ async def cancel_batch(
 
     return {
         "status": "cancelling",
-        "message": "Batch cancellation requested. Current item will complete before stopping."
+        "message": "Batch cancellation requested. Current item will complete before stopping.",
     }
 
 
 # Админские эндпоинты для мониторинга
 @router.get("/admin/batches")
 async def admin_list_all_batches(
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
-        limit: int = Query(50, ge=1, le=200),
-        offset: int = Query(0, ge=0),
-        status: Optional[str] = Query(None)
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: Optional[str] = Query(None),
 ):
     """Админ: список всех пакетных задач"""
     query = select(BatchJob)
@@ -402,22 +386,22 @@ async def admin_list_all_batches(
                 "common_refs_count": len(json.loads(b.common_refs_json or "[]")),
                 "created_at": b.created_at,
                 "started_at": b.started_at,
-                "completed_at": b.completed_at
+                "completed_at": b.completed_at,
             }
             for b in batches
         ],
         "total": total,
         "limit": limit,
-        "offset": offset
+        "offset": offset,
     }
 
 
 @router.get("/admin/batches/{batch_id}")
 async def admin_get_batch_details(
-        batch_id: str,
-        session: AsyncSession = Depends(get_async_session),
-        _: dict = Depends(require_admin),
-        include_items: bool = Query(True)
+    batch_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _: dict = Depends(require_admin),
+    include_items: bool = Query(True),
 ):
     """Админ: детальная информация о пакете"""
     batch = await session.get(BatchJob, batch_id)
@@ -441,14 +425,12 @@ async def admin_get_batch_details(
         "current_item_index": batch.current_item_index,
         "created_at": batch.created_at,
         "started_at": batch.started_at,
-        "completed_at": batch.completed_at
+        "completed_at": batch.completed_at,
     }
 
     if include_items:
         items = await session.execute(
-            select(BatchItem)
-            .where(BatchItem.batch_id == batch_id)
-            .order_by(BatchItem.index)
+            select(BatchItem).where(BatchItem.batch_id == batch_id).order_by(BatchItem.index)
         )
         result["items"] = [
             {
@@ -461,7 +443,7 @@ async def admin_get_batch_details(
                 "result_image_url": i.result_image_url,
                 "error_message": i.error_message,
                 "started_at": i.started_at,
-                "completed_at": i.completed_at
+                "completed_at": i.completed_at,
             }
             for i in items.scalars().all()
         ]
