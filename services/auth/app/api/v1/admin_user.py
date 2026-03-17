@@ -6,12 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func, delete
 
 from app.database.session import get_async_session
-from app.core.security import hash_password, verify_password, safe_decode_token
+from app.core.security import hash_password
 from app.models.user import User
 from app.models.refresh_session import RefreshSession
-from app.api.deps import require_admin, get_current_user
-from app.services.redis_client import get_redis
-from app.services.blacklist import blacklist_jti
+from app.api.deps import require_admin
 
 router = APIRouter(tags=["admin"])
 
