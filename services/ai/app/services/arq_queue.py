@@ -103,6 +103,10 @@ def _retry_defer_seconds(job_try: int) -> int:
     return max(1, job_try) * settings.ARQ_RETRY_BASE_SECONDS
 
 
+def _gemini_max_retries() -> int:
+    return max(0, min(settings.GEMINI_TASK_MAX_RETRIES, settings.ARQ_MAX_TRIES - 1))
+
+
 async def _claim_gemini_task(session: AsyncSession, task_id: str) -> Task | None:
     result = await session.execute(
         update(Task)
@@ -336,13 +340,14 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
         await _finalize_gemini_task(session, task, result_image_url=result_url)
     except GeminiError as e:
         job_try = int(ctx.get("job_try", 1))
-        if e.retryable and job_try < settings.ARQ_MAX_TRIES:
+        max_retries = _gemini_max_retries()
+        if e.retryable and job_try <= max_retries:
             task.status = "queued"
-            task.error_message = f"Temporary provider error, retry {job_try}/{settings.ARQ_MAX_TRIES - 1}"
+            task.error_message = f"Temporary provider error, retry {job_try}/{max_retries}"
             await session.commit()
             logger.warning(
                 f"[gemini-task] task={task.task_id} scheduling retry "
-                f"job_try={job_try} defer={_retry_defer_seconds(job_try)}s error={e}"
+                f"retry={job_try}/{max_retries} defer={_retry_defer_seconds(job_try)}s error={e}"
             )
             raise Retry(defer=_retry_defer_seconds(job_try))
 

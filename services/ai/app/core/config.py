@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     ARQ_MAX_JOBS: int = 4
     ARQ_MAX_TRIES: int = 4
     ARQ_RETRY_BASE_SECONDS: int = 10
+    GEMINI_TASK_MAX_RETRIES: int = 3
     ARQ_HEALTH_CHECK_INTERVAL_SECONDS: int = 30
     ARQ_HEALTH_CHECK_KEY: str = "nb:ai:worker:health"
 
