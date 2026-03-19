@@ -1,6 +1,6 @@
 from uuid import uuid4
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, ForeignKey, DateTime, Index
+from sqlalchemy import String, Text, Integer, ForeignKey, DateTime, Index, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +24,8 @@ class BatchJob(Base, TimestampMixin):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     resolution: Mapped[str] = mapped_column(String(8), nullable=False)
     aspect_ratio: Mapped[str] = mapped_column(String(16), nullable=False)
+    output_format: Mapped[str] = mapped_column(String(8), nullable=True, default="png")
+    google_search: Mapped[bool] = mapped_column(Boolean, nullable=True, default=True)
     common_refs_json: Mapped[str] = mapped_column(Text, nullable=True, default="[]")
 
     total_count: Mapped[int] = mapped_column(Integer, nullable=False)

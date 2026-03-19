@@ -43,19 +43,59 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       NANOBANANA_BASE_URL: ${NANOBANANA_BASE_URL}
       NANOBANANA_API_KEY: ${NANOBANANA_API_KEY}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL}
+      GEMINI_PROXY_URL: ${GEMINI_PROXY_URL}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALG: ${JWT_ALG}
       BILLING_INTERNAL_TOKEN: ${BILLING_INTERNAL_TOKEN}
-      BILLING_BASE_URL: http://billing:8000/api/v1/billing
+      BILLING_BASE_URL: http://billing:8002/api/v1/billing
     volumes:
       - ../media:/app/media
       - ../logs/ai:/app/logs
       - ../services/ai/alembic/versions:/app/alembic/versions
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
       - postgres
       - redis
+      - billing
+
+  ai_worker:
+    build: ../services/ai
+    container_name: nb_ai_worker
+    restart: always
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - ../.env.dev
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${AI_DB_USER}:${AI_DB_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${AI_DB_NAME}
+      REDIS_URL: ${REDIS_URL}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      NANOBANANA_BASE_URL: ${NANOBANANA_BASE_URL}
+      NANOBANANA_API_KEY: ${NANOBANANA_API_KEY}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL}
+      GEMINI_PROXY_URL: ${GEMINI_PROXY_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALG: ${JWT_ALG}
+      BILLING_INTERNAL_TOKEN: ${BILLING_INTERNAL_TOKEN}
+      BILLING_BASE_URL: http://billing:8002/api/v1/billing
+    volumes:
+      - ../media:/app/media
+      - ../logs/ai:/app/logs
+      - ../services/ai/alembic/versions:/app/alembic/versions
+    depends_on:
+      - postgres
+      - redis
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker_healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   auth:
     build: ../services/auth
@@ -71,8 +111,8 @@ services:
     volumes:
       - ../logs/auth:/app/logs
       - ../services/auth/alembic/versions:/app/alembic/versions
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:8001:8001"
     depends_on:
       - postgres
       - redis
@@ -90,8 +130,8 @@ services:
     volumes:
       - ../logs/billing:/app/logs
       - ../services/billing/alembic/versions:/app/alembic/versions
-    expose:
-      - "8000"
+    ports:
+      - "127.0.0.1:8002:8002"
     depends_on:
       - postgres
       - redis

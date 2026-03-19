@@ -1,4 +1,4 @@
-from sqlalchemy import String, Text, DateTime, ForeignKey
+from sqlalchemy import String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from datetime import datetime
@@ -16,7 +16,10 @@ class Task(Base, TimestampMixin):
     local_files: Mapped[str] = mapped_column(Text, default="[]")
 
     resolution: Mapped[str] = mapped_column(String(8), default="1K")
-    aspect_ratio: Mapped[str] = mapped_column(String(16), default="auto")
+    aspect_ratio: Mapped[str] = mapped_column(String(16), default="1:1")
+    output_format: Mapped[str] = mapped_column(String(8), default="png", nullable=True)
+    google_search: Mapped[bool] = mapped_column(Boolean, default=True, nullable=True)
+    provider: Mapped[str] = mapped_column(String(32), default="legacy_nanobanana", nullable=True)
 
     result_image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

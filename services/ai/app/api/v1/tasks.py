@@ -21,6 +21,8 @@ from app.models.message import Message
 from app.services.titles import make_chat_title
 from app.services.history import get_last_success_result_url, touch_chat
 from app.services.uploads import save_upload, cleanup_task_files
+from app.services.arq_queue import enqueue_job_once
+from app.clients.gemini_client import SUPPORTED_ASPECT_RATIOS, SUPPORTED_RESOLUTIONS
 
 from app.clients.nanobanana_client import NanoBananaClient
 from app.clients.billing_client import BillingClient, BillingNoFunds
@@ -34,6 +36,25 @@ billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOK
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _build_task_response(task: Task) -> dict:
+    success_flag = 0
+    if task.status == "success":
+        success_flag = 1
+    elif task.status == "failed":
+        success_flag = 2
+
+    return {
+        "code": 200,
+        "msg": "success",
+        "data": {
+            "taskId": task.task_id,
+            "successFlag": success_flag,
+            "response": {"resultImageUrl": task.result_image_url} if task.result_image_url else None,
+            "errorMessage": task.error_message if success_flag == 2 else None,
+        },
+    }
 
 
 async def _reconcile_success(t: Task) -> None:
@@ -65,6 +86,7 @@ async def _reconcile_failed(t: Task) -> None:
         )
         t.billing_state = "refunded"
     except Exception as e:
+        t.billing_state = "refund_pending"
         logger.error(f"[billing] reconcile fail/refund failed task={t.task_id}: {e}")
 
 
@@ -106,6 +128,15 @@ async def _get_task_status(task: Task, session: AsyncSession) -> dict:
     Внутренняя функция для получения статуса задачи.
     Вынесена из get_task для переиспользования в batch processing.
     """
+    if task.provider == "gemini":
+        if task.status == "success":
+            await _reconcile_success(task)
+            await session.commit()
+        elif task.status == "failed":
+            await _reconcile_failed(task)
+            await session.commit()
+        return _build_task_response(task)
+
     # если финал уже был — reconcile и вернуть
     if task.status in ("success", "failed"):
         if task.status == "success":
@@ -113,17 +144,7 @@ async def _get_task_status(task: Task, session: AsyncSession) -> dict:
         else:
             await _reconcile_failed(task)
         await session.commit()
-
-        return {
-            "code": 200,
-            "msg": "success",
-            "data": {
-                "taskId": task.task_id,
-                "successFlag": 1 if task.status == "success" else 2,
-                "response": {"resultImageUrl": task.result_image_url} if task.result_image_url else None,
-                "errorMessage": task.error_message,
-            },
-        }
+        return _build_task_response(task)
 
     now = _now()
     last = task.last_polled_at
@@ -207,12 +228,17 @@ async def generate_pro(
     imageUrls: Optional[List[str]] = Form(default=None),
     images: Optional[List[UploadFile]] = File(default=None),
     chat_id: Optional[str] = Form(default=None),
+    googleSearch: bool = Form(default=True),
+    outputFormat: str = Form(default="png"),
 ):
-    limit_generate(request)
-
     user_id = user_ctx.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    await limit_generate(request, user_id=str(user_id))
+
+    if not settings.GEMINI_API_ENABLED:
+        raise HTTPException(status_code=503, detail="Image generation is temporarily unavailable")
 
     prompt = (prompt or "").strip()
     if not prompt:
@@ -221,12 +247,17 @@ async def generate_pro(
     if len(prompt) > settings.MAX_PROMPT_LEN:
         raise HTTPException(400, detail="Prompt too long")
 
-    if resolution not in ("1K", "2K", "4K"):
+    if resolution not in SUPPORTED_RESOLUTIONS:
         raise HTTPException(400, detail="Invalid resolution")
 
-    allowed_ar = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "auto"}
-    if aspectRatio not in allowed_ar:
+    if aspectRatio not in SUPPORTED_ASPECT_RATIOS:
         raise HTTPException(400, detail="Invalid aspectRatio")
+
+    output_format = (outputFormat or "png").strip().lower()
+    if output_format == "jpeg":
+        output_format = "jpg"
+    if output_format not in {"png", "jpg"}:
+        raise HTTPException(400, detail="Invalid outputFormat")
 
     uploads = images or []
     if len(uploads) > settings.MAX_IMAGE_URLS:
@@ -280,80 +311,59 @@ async def generate_pro(
         await session.refresh(chat)
         chat_id = chat.id
 
-    # BILLING: reserve -> (cancel|confirm)
     request_id = str(uuid.uuid4())
+    task_id = uuid.uuid4().hex
 
-    try:
-        await billing.reserve(user_id=str(user_id), request_id=request_id, cost=1)
-    except BillingNoFunds:
-        raise HTTPException(status_code=402, detail="Not enough requests")
-    except Exception as e:
-        logger.error(f"[billing] reserve failed: {e}")
-        raise HTTPException(status_code=503, detail="Billing unavailable")
-
-    data = {
-        "prompt": prompt,
-        "imageUrls": image_urls,
-        "resolution": resolution,
-        "aspectRatio": aspectRatio,
-        "callBackUrl": f"{settings.PUBLIC_BASE_URL}/api/v1/ai/nanobanana/callback",
-        "googleSearch": True,
-        "outputFormat": "png",
-    }
-
-    # зовём nanobanana (в thread)
-    try:
-        res = await anyio.to_thread.run_sync(client.generate_pro, data)
-    except Exception:
-        # обязательный cancel, потому что task_id не получен
-        try:
-            await billing.cancel(user_id=str(user_id), request_id=request_id)
-        except Exception as ce:
-            logger.error(f"[billing] cancel failed after nanobanana exception: {ce}")
-        raise
-
-    # если nanobanana вернул ошибку ДО task_id -> обязательный cancel
-    if res.get("code") != 200 or not (res.get("data") or {}).get("taskId"):
-        try:
-            await billing.cancel(user_id=str(user_id), request_id=request_id)
-        except Exception as ce:
-            logger.error(f"[billing] cancel failed after nanobanana error: {ce}")
-
-        logger.error(f"NanoBanana generate_pro error: {res.get('msg')}")
-        raise HTTPException(status_code=502, detail=res.get("msg", "NanoBanana error"))
-
-    task_id = res["data"]["taskId"]
-
-    # confirm: если confirm упадёт — не валим запрос пользователю, дотянем reconcile позже
-    billing_state = "confirmed"
-    try:
-        await billing.confirm(user_id=str(user_id), request_id=request_id, task_id=task_id)
-    except Exception as e:
-        billing_state = "confirm_pending"
-        logger.error(f"[billing] confirm failed (request_id={request_id}, task_id={task_id}): {e}")
-
-    # сохраняем task + user-message
     t = Task(
         task_id=task_id,
-        status="running",
+        status="waiting_billing",
         prompt=prompt,
         image_urls=json.dumps(image_urls, ensure_ascii=False),
         local_files=json.dumps(local_files, ensure_ascii=False),
         resolution=resolution,
         aspect_ratio=aspectRatio,
+        output_format=output_format,
+        google_search=googleSearch,
+        provider="gemini",
         last_polled_at=None,
         chat_id=chat_id,
         user_id=user_id,
         billing_request_id=request_id,
-        billing_state=billing_state,
+        billing_state="none",
     )
-    await session.merge(t)
+    session.add(t)
+    await session.commit()
+    logger.info(
+        f"[generate-pro] created task={task_id} status=waiting_billing user={user_id} "
+        f"chat={chat_id} images={len(image_urls)} resolution={resolution} aspect={aspectRatio} "
+        f"output={output_format} google_search={googleSearch}"
+    )
+
+    try:
+        logger.info(f"[generate-pro] reserving billing for task={task_id} request_id={request_id}")
+        await billing.reserve(user_id=str(user_id), request_id=request_id, cost=1)
+        logger.info(f"[generate-pro] billing reserved for task={task_id} request_id={request_id}")
+    except BillingNoFunds:
+        await session.delete(t)
+        await session.commit()
+        raise HTTPException(status_code=402, detail="Not enough requests")
+    except Exception as e:
+        await session.delete(t)
+        await session.commit()
+        logger.error(f"[billing] reserve failed: {e}")
+        raise HTTPException(status_code=503, detail="Billing unavailable")
+
+    t.status = "queued"
+    t.billing_state = "reserved"
+    logger.info(f"[generate-pro] task={task_id} moved to status=queued billing_state=reserved")
 
     user_meta = {
         "resolution": resolution,
         "aspectRatio": aspectRatio,
         "imageUrls": image_urls,
         "localFiles": local_files,
+        "googleSearch": googleSearch,
+        "outputFormat": output_format,
     }
     session.add(
         Message(
@@ -368,6 +378,22 @@ async def generate_pro(
 
     await touch_chat(session, chat_id)
     await session.commit()
+    logger.info(f"[generate-pro] persisted task={task_id} and user message, enqueueing ARQ job")
+
+    try:
+        await enqueue_job_once("process_gemini_task", task_id, _job_id=f"gemini-task:{task_id}")
+        logger.info(f"[generate-pro] enqueued ARQ job for task={task_id}")
+    except Exception as e:
+        logger.error(f"Failed to enqueue Gemini task {task_id}: {e}")
+        t.status = "failed"
+        t.error_message = "Queue unavailable"
+        try:
+            await billing.cancel(user_id=str(user_id), request_id=request_id)
+            t.billing_state = "refunded"
+        except Exception as ce:
+            logger.error(f"[billing] cancel failed after queue error: {ce}")
+        await session.commit()
+        raise HTTPException(status_code=503, detail="Queue unavailable")
 
     return {"taskId": task_id, "chatId": chat_id}
 

@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -9,13 +9,15 @@ from app.database.session import get_async_session
 from app.api.deps import get_current_user, require_admin
 from app.core.config import settings
 from app.core.logger import logger
+from app.core.rate_limit import limit_batch_create
 from app.services.uploads import save_upload, ALLOWED_CT
 from app.services.titles import make_chat_title
 from app.clients.billing_client import BillingClient
+from app.clients.gemini_client import SUPPORTED_ASPECT_RATIOS, SUPPORTED_RESOLUTIONS
 
 from app.models.batch import BatchJob, BatchItem
 from app.models.chat import Chat
-from app.services.arq_queue import get_arq_pool
+from app.services.arq_queue import enqueue_job_once
 
 router = APIRouter(tags=["batches"])
 
@@ -72,9 +74,12 @@ async def validate_images(
 
 @router.post("/generate-batch")
 async def generate_batch(
+    request: Request,
     prompt: str = Form(..., description="Промт для генерации"),
     resolution: str = Form("1K", description="Разрешение: 1K, 2K, 4K"),
     aspectRatio: str = Form("1:1", description="Соотношение сторон"),
+    googleSearch: bool = Form(True, description="Использовать Google Search tool"),
+    outputFormat: str = Form("png", description="Формат результата: png|jpg"),
     image_urls: Optional[List[str]] = Form(None, description="URL изображений"),
     images: Optional[List[UploadFile]] = File(None, description="Файлы изображений"),
     reference_urls: Optional[List[str]] = Form(None, description="Общие URL-референсы"),
@@ -91,6 +96,11 @@ async def generate_batch(
     if not user_id:
         raise HTTPException(401, "Unauthorized")
 
+    await limit_batch_create(request, user_id=str(user_id))
+
+    if not settings.GEMINI_API_ENABLED:
+        raise HTTPException(503, "Image generation is temporarily unavailable")
+
     # Валидация промпта
     prompt = (prompt or "").strip()
     if not prompt:
@@ -99,13 +109,18 @@ async def generate_batch(
         raise HTTPException(400, f"Prompt too long (max {settings.MAX_PROMPT_LEN})")
 
     # Валидация resolution
-    if resolution not in ("1K", "2K", "4K"):
+    if resolution not in SUPPORTED_RESOLUTIONS:
         raise HTTPException(400, "Invalid resolution")
 
     # Валидация aspect ratio
-    allowed_ar = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "auto"}
-    if aspectRatio not in allowed_ar:
+    if aspectRatio not in SUPPORTED_ASPECT_RATIOS:
         raise HTTPException(400, "Invalid aspectRatio")
+
+    output_format = (outputFormat or "png").strip().lower()
+    if output_format == "jpeg":
+        output_format = "jpg"
+    if output_format not in {"png", "jpg"}:
+        raise HTTPException(400, "Invalid outputFormat")
 
     # Сохраняем и валидируем изображения
     try:
@@ -164,6 +179,8 @@ async def generate_batch(
         prompt=prompt,
         resolution=resolution,
         aspect_ratio=aspectRatio,
+        output_format=output_format,
+        google_search=googleSearch,
         common_refs_json=json.dumps(common_refs, ensure_ascii=False),
         total_count=total_images,
     )
@@ -184,8 +201,7 @@ async def generate_batch(
     await session.commit()
 
     # Запускаем фоновую обработку через ARQ
-    pool = await get_arq_pool()
-    await pool.enqueue_job("start_batch_processing", batch.id)
+    await enqueue_job_once("start_batch_processing", batch.id, _job_id=f"batch:{batch.id}")
 
     # Добавляем первое сообщение в чат о начале пакета
     from app.services.history import add_user_message
@@ -211,6 +227,8 @@ async def generate_batch(
         "total_images": total_images,
         "common_refs_count": len(common_refs),
         "status": "pending",
+        "google_search": googleSearch,
+        "output_format": output_format,
     }
 
 
@@ -251,6 +269,8 @@ async def get_batch_status(
         "prompt": batch.prompt,
         "resolution": batch.resolution,
         "aspect_ratio": batch.aspect_ratio,
+        "google_search": batch.google_search,
+        "output_format": batch.output_format,
         "common_refs_count": len(json.loads(batch.common_refs_json or "[]")),
         "created_at": batch.created_at,
         "started_at": batch.started_at,
@@ -306,6 +326,8 @@ async def list_batches(
                 "success": b.success_count,
                 "failed": b.failed_count,
                 "common_refs_count": len(json.loads(b.common_refs_json or "[]")),
+                "google_search": b.google_search,
+                "output_format": b.output_format,
                 "created_at": b.created_at,
                 "completed_at": b.completed_at,
             }
@@ -384,6 +406,8 @@ async def admin_list_all_batches(
                 "success": b.success_count,
                 "failed": b.failed_count,
                 "common_refs_count": len(json.loads(b.common_refs_json or "[]")),
+                "google_search": b.google_search,
+                "output_format": b.output_format,
                 "created_at": b.created_at,
                 "started_at": b.started_at,
                 "completed_at": b.completed_at,
@@ -416,6 +440,8 @@ async def admin_get_batch_details(
         "prompt": batch.prompt,
         "resolution": batch.resolution,
         "aspect_ratio": batch.aspect_ratio,
+        "google_search": batch.google_search,
+        "output_format": batch.output_format,
         "common_refs": json.loads(batch.common_refs_json or "[]"),
         "common_refs_count": len(json.loads(batch.common_refs_json or "[]")),
         "total_count": batch.total_count,

@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import router as v1_router
 from app.core.config import settings
 from app.core.logger import setup_logging
-from app.services.arq_queue import close_arq_pool
+from app.services.arq_queue import close_arq_pool, startup_recover_gemini_tasks
 
 setup_logging()
 
@@ -17,6 +17,7 @@ async def lifespan(app: FastAPI):
     """
     Управление жизненным циклом приложения
     """
+    await startup_recover_gemini_tasks()
     yield
 
     await close_arq_pool()
