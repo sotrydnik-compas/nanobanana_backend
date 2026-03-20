@@ -17,3 +17,5 @@ class Plan(Base, TimestampMixin):
     requests_total: Mapped[int] = mapped_column(Integer, nullable=False)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=True, default=False)
+    is_purchasable: Mapped[bool] = mapped_column(Boolean, nullable=True, default=True)

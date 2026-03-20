@@ -13,3 +13,5 @@ if str(SERVICE_ROOT) not in sys.path:
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/auth_test")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
 os.environ.setdefault("JWT_SECRET", "test-secret")
+os.environ.setdefault("BILLING_INTERNAL_TOKEN", "test-internal-token")
+os.environ.setdefault("BILLING_BASE_URL", "http://billing:8002/api/v1/billing")

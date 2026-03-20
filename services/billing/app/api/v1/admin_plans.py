@@ -2,6 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from sqlalchemy import select, update, desc
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_admin
@@ -19,9 +20,29 @@ def _to_dict(p: Plan) -> dict:
         "currency": p.currency,
         "requests_total": p.requests_total,
         "is_active": p.is_active,
+        "is_system": p.is_system,
+        "is_purchasable": p.is_purchasable,
         "created_at": p.created_at,
         "updated_at": p.updated_at,
     }
+
+
+async def _ensure_single_system_plan(
+    session: AsyncSession,
+    *,
+    requested_is_system: bool,
+    current_plan_id: uuid.UUID | None = None,
+) -> None:
+    if not requested_is_system:
+        return
+
+    query = select(Plan.id).where(Plan.is_system.is_(True))
+    if current_plan_id is not None:
+        query = query.where(Plan.id != current_plan_id)
+
+    exists = (await session.execute(query)).first()
+    if exists:
+        raise HTTPException(409, "Only one system plan is allowed")
 
 
 @router.get("/admin/plans")
@@ -41,6 +62,7 @@ async def admin_create_plan(
     requests_total: int = Form(...),
     currency: str = Form("RUB"),
     is_active: bool = Form(True),
+    is_system: bool = Form(False),
     session: AsyncSession = Depends(get_async_session),
     _: dict = Depends(require_admin),
 ):
@@ -54,15 +76,25 @@ async def admin_create_plan(
     if requests_total <= 0:
         raise HTTPException(400, "requests_total must be > 0")
 
+    await _ensure_single_system_plan(session, requested_is_system=bool(is_system))
+
     p = Plan(
         title=title,
         price_minor=price_minor,
         currency=(currency or "RUB").strip().upper(),
         requests_total=requests_total,
         is_active=bool(is_active),
+        is_system=bool(is_system),
+        is_purchasable=not bool(is_system),
     )
     session.add(p)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        if bool(is_system):
+            raise HTTPException(409, "Only one system plan is allowed")
+        raise HTTPException(409, "Plan could not be created due to a data conflict")
     await session.refresh(p)
     return {"plan": _to_dict(p)}
 
@@ -75,6 +107,7 @@ async def admin_update_plan(
     requests_total: int | None = Form(None),
     currency: str | None = Form(None),
     is_active: bool | None = Form(None),
+    is_system: bool | None = Form(None),
     session: AsyncSession = Depends(get_async_session),
     _: dict = Depends(require_admin),
 ):
@@ -111,7 +144,15 @@ async def admin_update_plan(
         values["currency"] = (currency or "RUB").strip().upper()
 
     if is_active is not None:
+        if p.is_system and not bool(is_active):
+            raise HTTPException(400, "System plan cannot be deactivated")
         values["is_active"] = bool(is_active)
+
+    if is_system is not None:
+        raise HTTPException(400, "is_system cannot be updated for an existing plan")
+
+    if p.is_system:
+        values["is_purchasable"] = False
 
     if not values:
         return {"plan": _to_dict(p)}
@@ -163,6 +204,8 @@ async def admin_deactivate_plan(
 
     if not p.is_active:
         return {"status": "ok"}
+    if p.is_system:
+        raise HTTPException(400, "System plan cannot be deactivated")
 
     await session.execute(update(Plan).where(Plan.id == pid).values(is_active=False))
     await session.commit()

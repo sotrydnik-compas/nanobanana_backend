@@ -5,6 +5,7 @@ from .me import router as me_router
 from .payments import router as payments_router
 from .webhooks import router as webhooks_router
 from .internal_usage import router as internal_usage_router
+from .internal_system_plan import router as internal_system_plan_router
 from .admin_plans import router as admin_plans_router
 from .admin_payments import router as admin_payments_router
 
@@ -16,5 +17,6 @@ router.include_router(me_router)
 router.include_router(payments_router)
 router.include_router(webhooks_router)
 router.include_router(internal_usage_router)
+router.include_router(internal_system_plan_router)
 router.include_router(admin_plans_router)
 router.include_router(admin_payments_router)

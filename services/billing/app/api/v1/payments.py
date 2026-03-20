@@ -55,6 +55,8 @@ async def create_payment(
     )
     if not plan:
         raise HTTPException(404, "Plan not found")
+    if not plan.is_purchasable:
+        raise HTTPException(400, "Plan is not available for purchase")
 
     p = Payment(
         user_id=user_id,
@@ -206,4 +208,3 @@ async def get_payment_provider_info(
         "status_before": old_status,
         "status_after": applied,
     }
-

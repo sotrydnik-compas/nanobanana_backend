@@ -34,5 +34,8 @@ class Settings(BaseSettings):
     CODE_RESEND_COOLDOWN_SECONDS: int = 60
     CODE_MAX_ATTEMPTS: int = 10
 
+    BILLING_BASE_URL: str = ""
+    BILLING_INTERNAL_TOKEN: str = ""
+
 
 settings = Settings()

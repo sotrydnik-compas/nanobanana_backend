@@ -12,6 +12,7 @@ from app.models.plan import Plan  # noqa
 from app.models.user_balance import UserBalance  # noqa
 from app.models.payment import Payment  # noqa
 from app.models.usage_reservation import UsageReservation  # noqa
+from app.models.system_plan_grant import SystemPlanGrant  # noqa
 
 config = context.config
 

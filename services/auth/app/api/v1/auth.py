@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from app.database.session import get_async_session
+from app.core.config import settings
 from app.core.security import (
     hash_password,
     verify_password,
@@ -20,12 +21,15 @@ from app.services.codes import (
     generate_code6,
     store_code,
     verify_code,
+    clear_code,
     in_cooldown,
     start_cooldown,
 )
+from app.services.billing_client import BillingClient, BillingError
 from app.services.mailer import send_code_email
 
 router = APIRouter(tags=["auth"])
+billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOKEN)
 
 
 def _now():
@@ -97,7 +101,7 @@ async def verify_email(
     if not code or len(code) != 6:
         raise HTTPException(400, "Invalid code")
 
-    ok = await verify_code("verify", email_n, code)
+    ok = await verify_code("verify", email_n, code, consume_on_success=False)
     if not ok:
         raise HTTPException(400, "Invalid or expired code")
 
@@ -105,8 +109,14 @@ async def verify_email(
     if not u:
         raise HTTPException(404, "User not found")
 
+    try:
+        await billing.grant_signup_system_plan(u.id)
+    except BillingError as e:
+        raise HTTPException(503, f"Billing unavailable: {e}")
+
     u.email_verified = True
     await session.commit()
+    await clear_code("verify", email_n)
     return {"status": "ok"}
 
 

@@ -108,6 +108,8 @@ services:
       REDIS_URL: ${REDIS_URL}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ALG: ${JWT_ALG}
+      BILLING_INTERNAL_TOKEN: ${BILLING_INTERNAL_TOKEN}
+      BILLING_BASE_URL: http://billing:8002/api/v1/billing
     volumes:
       - ../logs/auth:/app/logs
       - ../services/auth/alembic/versions:/app/alembic/versions

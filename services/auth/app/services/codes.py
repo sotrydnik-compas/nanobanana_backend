@@ -43,7 +43,13 @@ async def store_code(kind: str, email: str, code: str) -> None:
     await r.delete(_attempts_key(kind, email))
 
 
-async def verify_code(kind: str, email: str, code: str) -> bool:
+async def clear_code(kind: str, email: str) -> None:
+    r = get_redis()
+    await r.delete(_key(kind, email))
+    await r.delete(_attempts_key(kind, email))
+
+
+async def verify_code(kind: str, email: str, code: str, *, consume_on_success: bool = True) -> bool:
     r = get_redis()
     k = _key(kind, email)
     stored = await r.get(k)
@@ -60,7 +66,6 @@ async def verify_code(kind: str, email: str, code: str) -> bool:
         return False
 
     ok = secrets.compare_digest(stored, _hash(code))
-    if ok:
-        await r.delete(k)
-        await r.delete(ak)
+    if ok and consume_on_success:
+        await clear_code(kind, email)
     return ok
