@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     MAX_PROMPT_LEN: int = 800
     MAX_IMAGE_URLS: int = 8
-    MAX_UPLOAD_MB: int = 10
+    MAX_UPLOAD_MB: int = 100
     POLL_INTERVAL_SECONDS: int = 30
     TIMEOUT_SECONDS: int = 999
     ARQ_MAX_JOBS: int = 4
