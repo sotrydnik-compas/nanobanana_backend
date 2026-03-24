@@ -19,6 +19,12 @@ from app.clients.billing_client import BillingClient, BillingNoFunds
 from app.clients.gemini_client import GeminiClient, GeminiError
 from app.services.history import touch_chat
 from app.services.gemini_images import load_reference_image, save_generated_image
+from app.services.file_lifecycle import (
+    cleanup_batch_storage,
+    cleanup_chat_deleted_result_if_needed,
+    cleanup_task_local_files,
+    run_media_cleanup,
+)
 
 # Настройки Redis для ARQ
 REDIS_SETTINGS = RedisSettings.from_dsn(
@@ -177,6 +183,9 @@ async def _mark_task_failed_without_billing(
     task.status = "failed"
     task.error_message = error_message
 
+    if task.result_image_url:
+        await cleanup_chat_deleted_result_if_needed(session, task)
+
     if task.chat_id:
         exists_q = select(Message.id).where(
             Message.chat_id == task.chat_id,
@@ -190,7 +199,7 @@ async def _mark_task_failed_without_billing(
                     chat_id=task.chat_id,
                     user_id=task.user_id,
                     role="assistant",
-                    content=assistant_content,
+                    content=assistant_content or error_message,
                     meta_json=json.dumps(
                         {
                             "successFlag": 2,
@@ -235,9 +244,7 @@ async def _finalize_gemini_task(
 
     cleanup_needed = task.status in ("success", "failed")
     if cleanup_needed:
-        from app.services.uploads import cleanup_task_files
-
-        cleanup_task_files(task)
+        cleanup_task_local_files(task)
 
     if task.status == "success":
         try:
@@ -265,6 +272,9 @@ async def _finalize_gemini_task(
             logger.error(f"[billing] gemini refund failed task={task.task_id}: {e}")
             await _enqueue_billing_reconcile(task.task_id)
 
+    if task.result_image_url:
+        await cleanup_chat_deleted_result_if_needed(session, task)
+
     if task.chat_id:
         exists_q = select(Message.id).where(
             Message.chat_id == task.chat_id,
@@ -283,7 +293,7 @@ async def _finalize_gemini_task(
                     chat_id=task.chat_id,
                     user_id=task.user_id,
                     role="assistant",
-                    content="",
+                    content=task.error_message or "",
                     meta_json=json.dumps(meta, ensure_ascii=False),
                     task_id=task.task_id,
                 )
@@ -296,6 +306,7 @@ async def _finalize_gemini_task(
             batch_item.status = task.status
             batch_item.result_image_url = task.result_image_url
             batch_item.error_message = task.error_message
+            batch_item.local_file = None
             batch_item.completed_at = datetime.now(timezone.utc)
 
     await session.commit()
@@ -486,6 +497,11 @@ async def startup_recover_gemini_tasks() -> None:
         await recover_gemini_tasks({})
         await recover_batches({})
         await recover_gemini_billing({})
+        async with AsyncSessionLocal() as session:
+            deleted_files = await run_media_cleanup(session)
+            await session.commit()
+            if deleted_files:
+                logger.info(f"[file-lifecycle] startup cleanup deleted {deleted_files} media file(s)")
     except Exception as e:
         logger.error(f"Startup Gemini recovery failed: {e}")
 
@@ -775,8 +791,16 @@ async def start_batch_processing(ctx, batch_id: str):
             batch.status = "completed"
 
         batch.completed_at = datetime.now(timezone.utc)
+        deleted_files = await cleanup_batch_storage(
+            session,
+            batch,
+            include_item_uploads=True,
+            include_results=False,
+        )
 
         await session.commit()
+        if deleted_files:
+            logger.info(f"[file-lifecycle] batch {batch_id} cleanup deleted {deleted_files} media file(s)")
         logger.info(f"Batch {batch_id} finished with status {batch.status}")
 
 

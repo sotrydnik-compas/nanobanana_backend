@@ -21,6 +21,7 @@ from app.models.message import Message
 from app.services.titles import make_chat_title
 from app.services.history import get_last_success_result_url, touch_chat
 from app.services.uploads import save_upload, cleanup_task_files
+from app.services.file_lifecycle import cleanup_saved_upload_paths
 from app.services.arq_queue import enqueue_job_once
 from app.clients.gemini_client import SUPPORTED_ASPECT_RATIOS, SUPPORTED_RESOLUTIONS
 
@@ -206,7 +207,7 @@ async def _get_task_status(task: Task, session: AsyncSession) -> dict:
                     chat_id=task.chat_id,
                     user_id=task.user_id,
                     role="assistant",
-                    content="",
+                    content=task.error_message or "",
                     meta_json=json.dumps(meta, ensure_ascii=False),
                     task_id=task.task_id,
                 )
@@ -344,10 +345,12 @@ async def generate_pro(
         await billing.reserve(user_id=str(user_id), request_id=request_id, cost=1)
         logger.info(f"[generate-pro] billing reserved for task={task_id} request_id={request_id}")
     except BillingNoFunds:
+        cleanup_saved_upload_paths(local_files)
         await session.delete(t)
         await session.commit()
         raise HTTPException(status_code=402, detail="Not enough requests")
     except Exception as e:
+        cleanup_saved_upload_paths(local_files)
         await session.delete(t)
         await session.commit()
         logger.error(f"[billing] reserve failed: {e}")
@@ -392,6 +395,7 @@ async def generate_pro(
             t.billing_state = "refunded"
         except Exception as ce:
             logger.error(f"[billing] cancel failed after queue error: {ce}")
+        cleanup_saved_upload_paths(local_files)
         await session.commit()
         raise HTTPException(status_code=503, detail="Queue unavailable")
 

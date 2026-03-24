@@ -40,12 +40,13 @@ class Settings(BaseSettings):
     TIMEOUT_SECONDS: int = 999
     ARQ_MAX_JOBS: int = 4
     ARQ_MAX_TRIES: int = 4
-    ARQ_RETRY_BASE_SECONDS: int = 10
+    ARQ_RETRY_BASE_SECONDS: int = 15
     GEMINI_TASK_MAX_RETRIES: int = 3
     ARQ_HEALTH_CHECK_INTERVAL_SECONDS: int = 30
     ARQ_HEALTH_CHECK_KEY: str = "nb:ai:worker:health"
 
     MEDIA_DIR: str = "media"
+    GENERATED_IMAGE_RETENTION_DAYS: int = 60
     AUTO_CREATE_TABLES: bool = False
     STORE_RESULTS: bool = False
 

@@ -8,6 +8,7 @@ from app.api.deps import get_current_user
 from app.models.chat import Chat
 from app.models.message import Message
 from app.services.history import touch_chat
+from app.services.file_lifecycle import cleanup_chat_media
 
 router = APIRouter(tags=["chats"])
 
@@ -141,6 +142,8 @@ async def delete_chat(
         c.deleted_at = datetime.now(timezone.utc)
 
         await touch_chat(session, chat_id)
+        deleted_files = await cleanup_chat_media(session, chat_id)
         await session.commit()
+        return {"status": "ok", "deleted_files": deleted_files}
 
-    return {"status": "ok"}
+    return {"status": "ok", "deleted_files": 0}

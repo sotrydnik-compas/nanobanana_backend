@@ -18,6 +18,7 @@ from app.clients.gemini_client import SUPPORTED_ASPECT_RATIOS, SUPPORTED_RESOLUT
 from app.models.batch import BatchJob, BatchItem
 from app.models.chat import Chat
 from app.services.arq_queue import enqueue_job_once
+from app.services.file_lifecycle import cleanup_batch_storage
 
 router = APIRouter(tags=["batches"])
 
@@ -201,7 +202,14 @@ async def generate_batch(
     await session.commit()
 
     # Запускаем фоновую обработку через ARQ
-    await enqueue_job_once("start_batch_processing", batch.id, _job_id=f"batch:{batch.id}")
+    try:
+        await enqueue_job_once("start_batch_processing", batch.id, _job_id=f"batch:{batch.id}")
+    except Exception as e:
+        logger.error(f"Failed to enqueue batch {batch.id}: {e}")
+        await cleanup_batch_storage(session, batch, include_item_uploads=True, include_results=False)
+        await session.delete(batch)
+        await session.commit()
+        raise HTTPException(503, "Queue unavailable")
 
     # Добавляем первое сообщение в чат о начале пакета
     from app.services.history import add_user_message
@@ -359,8 +367,9 @@ async def cancel_batch(
     if batch.status == "pending":
         batch.status = "cancelled"
         batch.completed_at = datetime.now(timezone.utc)
+        deleted_files = await cleanup_batch_storage(session, batch, include_item_uploads=True, include_results=False)
         await session.commit()
-        return {"status": "cancelled", "message": "Batch cancelled before processing started."}
+        return {"status": "cancelled", "message": "Batch cancelled before processing started.", "deleted_files": deleted_files}
 
     # processing -> просим остановить ПОСЛЕ текущего элемента
     batch.status = "cancelling"
