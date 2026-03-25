@@ -420,7 +420,11 @@ async def process_gemini_task(ctx, task_id: str) -> None:
         if task.batch_item_id:
             batch_item = await session.get(BatchItem, task.batch_item_id)
             if batch_item:
-                await enqueue_job_once("start_batch_processing", batch_item.batch_id, _job_id=f"batch:{batch_item.batch_id}")
+                await enqueue_job_once(
+                    "start_batch_processing",
+                    batch_item.batch_id,
+                    _job_id=f"batch-resume:{batch_item.batch_id}:{task.task_id}",
+                )
 
 
 async def recover_gemini_tasks(ctx) -> None:
@@ -620,20 +624,19 @@ async def process_batch_item(
             await session.commit()
             logger.info(f"[batch] task={task_id} moved to status=queued billing_state=reserved")
 
-            claimed_task = await _claim_gemini_task(session, task_id)
-            if not claimed_task:
-                raise RuntimeError(f"Failed to claim Gemini task {task_id} for batch item {item_id}")
             try:
-                await _execute_gemini_task(session, claimed_task, ctx)
-            except Retry:
-                logger.info(f"Retry requested for batch task {task_id}, marking item failed to keep batch moving")
-                await _finalize_gemini_task(session, claimed_task, error_message="Temporary provider error")
+                await enqueue_job_once("process_gemini_task", task_id, _job_id=f"gemini-task:{task_id}")
+                logger.info(f"[batch] enqueued Gemini task worker job for task={task_id}")
+            except Exception as enqueue_error:
+                raise RuntimeError(
+                    f"Failed to enqueue Gemini task {task_id} for batch item {item_id}: {enqueue_error}"
+                ) from enqueue_error
 
             await session.refresh(item)
             await session.refresh(batch)
             await _sync_batch_progress(session, batch)
-            batch.current_item_index = item_index + 1
             await session.commit()
+            return
 
         except Exception as e:
             logger.exception(f"Error processing batch item {item_id}: {e}")
@@ -768,7 +771,7 @@ async def start_batch_processing(ctx, batch_id: str):
                 await session.refresh(batch)
                 await _sync_batch_progress(session, batch)
                 await session.commit()
-                logger.info(f"Batch {batch_id} paused after handing off item {item.id} to async retry flow")
+                logger.info(f"Batch {batch_id} paused after handing off item {item.id} to async task execution")
                 break
             await session.refresh(batch)
             await _sync_batch_progress(session, batch)
