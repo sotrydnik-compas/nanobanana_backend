@@ -33,6 +33,16 @@ def get_local_media_rel_path_from_url(url: str | None) -> str | None:
     return None
 
 
+def is_generated_media_rel_path(rel_path: str | None) -> bool:
+    normalized = (rel_path or "").strip().lstrip("/")
+    if not normalized:
+        return False
+    if normalized.startswith("generated/"):
+        return True
+    parts = normalized.split("/")
+    return len(parts) >= 2 and parts[1] == "generated"
+
+
 def _safe_abs_media_path(rel_path: str) -> str | None:
     normalized = (rel_path or "").strip().lstrip("/")
     if not normalized:
@@ -46,6 +56,20 @@ def _safe_abs_media_path(rel_path: str) -> str | None:
     return abs_path
 
 
+def _prune_empty_media_dirs(from_abs_path: str) -> None:
+    media_root = os.path.abspath(settings.MEDIA_DIR)
+    current = os.path.dirname(from_abs_path)
+
+    while current.startswith(media_root) and current != media_root:
+        try:
+            if os.listdir(current):
+                break
+            os.rmdir(current)
+        except Exception:
+            break
+        current = os.path.dirname(current)
+
+
 def delete_media_rel_path(rel_path: str | None) -> bool:
     abs_path = _safe_abs_media_path(rel_path or "")
     if not abs_path:
@@ -54,6 +78,7 @@ def delete_media_rel_path(rel_path: str | None) -> bool:
     try:
         if os.path.exists(abs_path):
             os.remove(abs_path)
+            _prune_empty_media_dirs(abs_path)
             return True
     except Exception as e:
         logger.error(f"[file-lifecycle] failed to delete media file {abs_path}: {e}")
@@ -192,7 +217,6 @@ async def cleanup_expired_generated_media(session: AsyncSession, *, retention_da
     tasks = (
         await session.execute(
             select(Task).where(
-                Task.result_image_url.is_not(None),
                 Task.updated_at < cutoff,
             )
         )
@@ -200,18 +224,20 @@ async def cleanup_expired_generated_media(session: AsyncSession, *, retention_da
 
     deleted = 0
     for task in tasks:
-        rel_path = get_local_media_rel_path_from_url(task.result_image_url)
-        if not rel_path or not rel_path.startswith("generated/"):
-            continue
+        if task.result_image_url:
+            rel_path = get_local_media_rel_path_from_url(task.result_image_url)
+            if is_generated_media_rel_path(rel_path):
+                if cleanup_local_result_url(task.result_image_url):
+                    deleted += 1
+                task.result_image_url = None
 
-        if cleanup_local_result_url(task.result_image_url):
-            deleted += 1
-        task.result_image_url = None
+                if task.batch_item_id:
+                    batch_item = await session.get(BatchItem, task.batch_item_id)
+                    if batch_item:
+                        batch_item.result_image_url = None
 
-        if task.batch_item_id:
-            batch_item = await session.get(BatchItem, task.batch_item_id)
-            if batch_item:
-                batch_item.result_image_url = None
+        if task.local_files:
+            deleted += cleanup_task_local_files(task)
 
     return deleted
 

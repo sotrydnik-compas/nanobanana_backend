@@ -22,7 +22,6 @@ from app.services.gemini_images import load_reference_image, save_generated_imag
 from app.services.file_lifecycle import (
     cleanup_batch_storage,
     cleanup_chat_deleted_result_if_needed,
-    cleanup_task_local_files,
     run_media_cleanup,
 )
 
@@ -242,10 +241,6 @@ async def _finalize_gemini_task(
         task.status = "failed"
         task.error_message = error_message or "Generation failed"
 
-    cleanup_needed = task.status in ("success", "failed")
-    if cleanup_needed:
-        cleanup_task_local_files(task)
-
     if task.status == "success":
         try:
             logger.info(f"[gemini-task] confirming billing for task={task.task_id} request_id={task.billing_request_id}")
@@ -341,10 +336,18 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
             f"[gemini-task] task={task.task_id} received Gemini response "
             f"mime={result['mime_type']} bytes={len(result['image_bytes'])}"
         )
+        generated_subdir = "generated"
+        if task.batch_item_id:
+            batch_item = await session.get(BatchItem, task.batch_item_id)
+            if batch_item:
+                generated_subdir = f"{batch_item.batch_id}/generated"
+        elif task.chat_id:
+            generated_subdir = f"{task.chat_id}/generated"
         rel_path = save_generated_image(
             result["image_bytes"],
             mime_type=result["mime_type"],
             output_format=task.output_format,
+            subdir=generated_subdir,
         )
         logger.info(f"[gemini-task] task={task.task_id} saved image to media/{rel_path}")
         result_url = f"{settings.PUBLIC_BASE_URL}/media/{rel_path}"

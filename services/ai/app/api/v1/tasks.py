@@ -264,21 +264,6 @@ async def generate_pro(
     if len(uploads) > settings.MAX_IMAGE_URLS:
         raise HTTPException(400, detail="Too many images")
 
-    url_list = imageUrls or []
-    image_urls = [u for u in url_list if isinstance(u, str) and u.strip()]
-    local_files: list[str] = []
-    max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
-
-    # сохраняем загруженные файлы в media и добавляем их как url
-    for up in uploads:
-        try:
-            name = await save_upload(up, max_bytes=max_bytes)
-            local_files.append(name)
-            image_urls.append(f"{settings.PUBLIC_BASE_URL}/media/{name}")
-        except Exception as e:
-            logger.error(f"Error saving upload {up.filename}: {e}")
-            raise
-
     # чат: либо используем существующий, либо создаём новый
     if chat_id:
         chat = await session.get(Chat, chat_id)
@@ -297,20 +282,36 @@ async def generate_pro(
         if chat.status == "closed":
             raise HTTPException(status_code=400, detail="Chat is closed")
 
-        # auto-reference
-        last_url = await get_last_success_result_url(session, chat_id)
-        image_urls = _prepend_chat_result_reference(
-            image_urls=image_urls,
-            last_url=last_url,
-            limit=settings.MAX_IMAGE_URLS,
-        )
-
     else:
         chat = Chat(title=make_chat_title(prompt), user_id=user_id)
         session.add(chat)
         await session.commit()
         await session.refresh(chat)
         chat_id = chat.id
+
+    url_list = imageUrls or []
+    image_urls = [u for u in url_list if isinstance(u, str) and u.strip()]
+    local_files: list[str] = []
+    max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+    refs_subdir = f"{chat_id}/refs"
+
+    # сохраняем загруженные файлы в media/<chat_id>/refs и добавляем их как url
+    for up in uploads:
+        try:
+            name = await save_upload(up, max_bytes=max_bytes, subdir=refs_subdir)
+            local_files.append(name)
+            image_urls.append(f"{settings.PUBLIC_BASE_URL}/media/{name}")
+        except Exception as e:
+            logger.error(f"Error saving upload {up.filename}: {e}")
+            raise
+
+    # auto-reference
+    last_url = await get_last_success_result_url(session, chat_id)
+    image_urls = _prepend_chat_result_reference(
+        image_urls=image_urls,
+        last_url=last_url,
+        limit=settings.MAX_IMAGE_URLS,
+    )
 
     request_id = str(uuid.uuid4())
     task_id = uuid.uuid4().hex

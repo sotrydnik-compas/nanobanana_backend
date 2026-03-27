@@ -1,4 +1,5 @@
 import json
+from uuid import uuid4
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File, Query, Request
@@ -18,7 +19,7 @@ from app.clients.gemini_client import SUPPORTED_ASPECT_RATIOS, SUPPORTED_RESOLUT
 from app.models.batch import BatchJob, BatchItem
 from app.models.chat import Chat
 from app.services.arq_queue import enqueue_job_once
-from app.services.file_lifecycle import cleanup_batch_storage
+from app.services.file_lifecycle import cleanup_batch_storage, cleanup_saved_upload_paths
 
 router = APIRouter(tags=["batches"])
 
@@ -31,6 +32,7 @@ async def validate_images(
     *,
     max_items: int,
     kind: str,
+    upload_subdir: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Валидация и сохранение изображений.
@@ -56,17 +58,20 @@ async def validate_images(
     # Обрабатываем загруженные файлы
     if images:
         max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+        saved_paths: List[str] = []
         for img in images:
             if img.content_type not in ALLOWED_CT:
+                cleanup_saved_upload_paths(saved_paths)
                 raise HTTPException(400, f"Unsupported file type: {img.content_type}")
 
             ensure_can_add()
             try:
-                # Сохраняем в подпапку batches для лучшей организации
-                path = await save_upload(img, max_bytes=max_bytes, subdir="batches")
+                path = await save_upload(img, max_bytes=max_bytes, subdir=upload_subdir or "batches")
+                saved_paths.append(path)
                 public_url = f"{settings.PUBLIC_BASE_URL}/media/{path}"
                 items.append({"image_url": public_url, "local_file": path})
             except Exception as e:
+                cleanup_saved_upload_paths(saved_paths)
                 logger.error(f"Error saving upload: {e}")
                 raise HTTPException(500, f"Failed to save file: {img.filename}")
 
@@ -123,25 +128,6 @@ async def generate_batch(
     if output_format not in {"png", "jpg"}:
         raise HTTPException(400, "Invalid outputFormat")
 
-    # Сохраняем и валидируем изображения
-    try:
-        items = await validate_images(image_urls, images, max_items=100, kind="images")
-        common_ref_items = await validate_images(
-            reference_urls, reference_images, max_items=5, kind="reference images"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error validating images: {e}")
-        raise HTTPException(500, "Error processing images")
-
-    # Проверяем количество
-    total_images = len(items)
-    if total_images == 0:
-        raise HTTPException(400, "At least one image required")
-
-    common_refs = [it["image_url"] for it in common_ref_items if it.get("image_url")]
-
     # Работа с чатом
     if chat_id:
         chat = await session.get(Chat, chat_id)
@@ -162,6 +148,50 @@ async def generate_batch(
         await session.refresh(chat)
         chat_id = chat.id
 
+    batch_id = str(uuid4())
+    items: List[Dict[str, Any]] = []
+    common_ref_items: List[Dict[str, Any]] = []
+
+    # Сохраняем и валидируем изображения
+    try:
+        items = await validate_images(
+            image_urls,
+            images,
+            max_items=100,
+            kind="images",
+            upload_subdir=f"{batch_id}/refs/items",
+        )
+        common_ref_items = await validate_images(
+            reference_urls,
+            reference_images,
+            max_items=5,
+            kind="reference images",
+            upload_subdir=f"{batch_id}/refs/common",
+        )
+    except HTTPException:
+        cleanup_saved_upload_paths([
+            *(it.get("local_file") for it in items if it.get("local_file")),
+            *(it.get("local_file") for it in common_ref_items if it.get("local_file")),
+        ])
+        raise
+    except Exception as e:
+        cleanup_saved_upload_paths([
+            *(it.get("local_file") for it in items if it.get("local_file")),
+            *(it.get("local_file") for it in common_ref_items if it.get("local_file")),
+        ])
+        logger.error(f"Error validating images: {e}")
+        raise HTTPException(500, "Error processing images")
+
+    # Проверяем количество
+    total_images = len(items)
+    if total_images == 0:
+        cleanup_saved_upload_paths([
+            *(it.get("local_file") for it in common_ref_items if it.get("local_file")),
+        ])
+        raise HTTPException(400, "At least one image required")
+
+    common_refs = [it["image_url"] for it in common_ref_items if it.get("image_url")]
+
     # Это не нужно, но тут возможно нужна проверка, хватит ли на счете токенов что бы обработать cost.
     # Проверяем средства в биллинге
     # cost = total_images  # стоимость = количество изображений
@@ -175,6 +205,7 @@ async def generate_batch(
 
     # Создаем BatchJob
     batch = BatchJob(
+        id=batch_id,
         user_id=user_id,
         chat_id=chat_id,
         prompt=prompt,

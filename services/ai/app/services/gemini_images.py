@@ -85,16 +85,23 @@ async def load_reference_image(url: str) -> dict[str, bytes | str]:
     return _normalize_reference_image(data, mime_type, url)
 
 
-def save_generated_image(image_bytes: bytes, mime_type: str, output_format: str) -> str:
+def save_generated_image(
+    image_bytes: bytes,
+    mime_type: str,
+    output_format: str,
+    subdir: str = "generated",
+) -> str:
     fmt = (output_format or "png").lower()
     if fmt == "jpeg":
         fmt = "jpg"
     if fmt not in ALLOWED_OUTPUT_FORMATS:
         raise ValueError(f"Unsupported output format: {output_format}")
 
-    os.makedirs(os.path.join(settings.MEDIA_DIR, "generated"), exist_ok=True)
+    normalized_subdir = (subdir or "generated").strip().strip("/") or "generated"
+    target_dir = os.path.join(settings.MEDIA_DIR, normalized_subdir)
+    os.makedirs(target_dir, exist_ok=True)
     filename = f"{uuid.uuid4().hex}.{fmt}"
-    rel_path = os.path.join("generated", filename).replace("\\", "/")
+    rel_path = os.path.join(normalized_subdir, filename).replace("\\", "/")
     abs_path = os.path.join(settings.MEDIA_DIR, rel_path)
 
     image = Image.open(io.BytesIO(image_bytes))
