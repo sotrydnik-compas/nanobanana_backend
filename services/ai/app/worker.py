@@ -20,19 +20,23 @@ async def main():
 
     # Создаем и запускаем worker
     max_jobs = settings.ARQ_MAX_JOBS
+    worker_max_tries = max(
+        settings.ARQ_MAX_TRIES,
+        settings.GEMINI_TASK_MAX_RETRIES + settings.GEMINI_FALLBACK_TASK_MAX_RETRIES + 2,
+    )
     worker = Worker(
         functions=WORKER_FUNCTIONS,
         redis_settings=REDIS_SETTINGS,
         queue_name="arq:queue",
         poll_delay=0.5,
         max_jobs=max_jobs,
-        max_tries=settings.ARQ_MAX_TRIES,
+        max_tries=worker_max_tries,
         job_timeout=7200,
         health_check_interval=settings.ARQ_HEALTH_CHECK_INTERVAL_SECONDS,
         health_check_key=settings.ARQ_HEALTH_CHECK_KEY,
     )
 
-    logger.info("Worker is ready and waiting for jobs...")
+    logger.info(f"Worker is ready and waiting for jobs... max_tries={worker_max_tries}")
     await worker.async_run()
 
 

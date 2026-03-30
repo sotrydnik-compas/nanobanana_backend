@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     GEMINI_API_KEY: str = "SECRET"
     GEMINI_MODEL: str = "gemini-3.1-flash-image-preview"
+    GEMINI_FALLBACK_MODEL: str = "gemini-3-pro-image-preview"
     GEMINI_PROXY_URL: str | None = "http://ip:port"
     GEMINI_API_ENABLED: bool = True
     GEMINI_CONNECT_TIMEOUT_SECONDS: int = 10
@@ -42,6 +43,7 @@ class Settings(BaseSettings):
     ARQ_MAX_TRIES: int = 4
     ARQ_RETRY_BASE_SECONDS: int = 15
     GEMINI_TASK_MAX_RETRIES: int = 3
+    GEMINI_FALLBACK_TASK_MAX_RETRIES: int = 3
     ARQ_HEALTH_CHECK_INTERVAL_SECONDS: int = 30
     ARQ_HEALTH_CHECK_KEY: str = "nb:ai:worker:health"
 

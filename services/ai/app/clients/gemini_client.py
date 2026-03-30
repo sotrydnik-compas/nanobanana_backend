@@ -1,4 +1,5 @@
 import base64
+import json
 
 import httpx
 
@@ -20,6 +21,7 @@ class GeminiClient:
         self.base_url = settings.GEMINI_BASE_URL.rstrip("/")
         self.api_key = settings.GEMINI_API_KEY
         self.model = settings.GEMINI_MODEL
+        self.fallback_model = settings.GEMINI_FALLBACK_MODEL
         self.proxy_url = settings.GEMINI_PROXY_URL
         self.connect_timeout = settings.GEMINI_CONNECT_TIMEOUT_SECONDS
         self.write_timeout = settings.GEMINI_WRITE_TIMEOUT_SECONDS
@@ -42,6 +44,7 @@ class GeminiClient:
         resolution: str,
         aspect_ratio: str,
         google_search: bool,
+        model: str | None = None,
     ) -> dict:
         if not self.api_key:
             raise GeminiError("GEMINI_API_KEY is not configured")
@@ -71,14 +74,15 @@ class GeminiClient:
         if google_search:
             payload["tools"] = [{"google_search": {}}]
 
-        url = f"{self.base_url}/models/{self.model}:generateContent"
+        selected_model = (model or self.model).strip() if (model or self.model) else self.model
+        url = f"{self.base_url}/models/{selected_model}:generateContent"
         headers = {
             "x-goog-api-key": self.api_key,
             "Content-Type": "application/json",
         }
 
         logger.info(
-            f"[gemini-client] POST {url} model={self.model} proxy={'set' if self.proxy_url else 'unset'} "
+            f"[gemini-client] POST {url} model={selected_model} proxy={'set' if self.proxy_url else 'unset'} "
             f"images={len(images)} resolution={resolution} aspect={aspect_ratio} google_search={google_search}"
         )
 
@@ -125,4 +129,13 @@ class GeminiClient:
                     "raw_response": data,
                 }
 
+        candidate = (data.get("candidates") or [{}])[0]
+        logger.error(
+            "[gemini-client] response without image "
+            f"model={selected_model} "
+            f"finish_reason={candidate.get('finishReason')} "
+            f"prompt_feedback={json.dumps(data.get('promptFeedback'), ensure_ascii=False)[:1000]} "
+            f"text_parts={json.dumps([part.get('text') for part in parts if part.get('text')], ensure_ascii=False)[:1000]} "
+            f"response_snippet={json.dumps(data, ensure_ascii=False)[:2000]}"
+        )
         raise GeminiError("Gemini response does not contain an image")

@@ -108,8 +108,32 @@ def _retry_defer_seconds(job_try: int) -> int:
     return max(1, job_try) * settings.ARQ_RETRY_BASE_SECONDS
 
 
-def _gemini_max_retries() -> int:
-    return max(0, min(settings.GEMINI_TASK_MAX_RETRIES, settings.ARQ_MAX_TRIES - 1))
+def _gemini_primary_max_retries() -> int:
+    return max(0, settings.GEMINI_TASK_MAX_RETRIES)
+
+
+def _gemini_fallback_max_retries() -> int:
+    return max(0, settings.GEMINI_FALLBACK_TASK_MAX_RETRIES)
+
+
+def _gemini_total_attempts() -> int:
+    return max(1, (_gemini_primary_max_retries() + 1) + (_gemini_fallback_max_retries() + 1))
+
+
+def _gemini_total_max_retries() -> int:
+    return max(0, _gemini_total_attempts() - 1)
+
+
+def _select_gemini_model_for_retry(job_try: int) -> tuple[str, str, int, int]:
+    primary_retries = _gemini_primary_max_retries()
+    fallback_retries = _gemini_fallback_max_retries()
+    attempt = max(1, job_try)
+
+    if attempt <= primary_retries + 1:
+        return settings.GEMINI_MODEL, "primary", attempt, primary_retries + 1
+
+    fallback_attempt = attempt - (primary_retries + 1)
+    return settings.GEMINI_FALLBACK_MODEL, "fallback", fallback_attempt, fallback_retries + 1
 
 
 async def _claim_gemini_task(session: AsyncSession, task_id: str) -> Task | None:
@@ -324,13 +348,19 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
         for image_url in image_urls:
             inputs.append(await load_reference_image(str(image_url)))
 
-        logger.info(f"[gemini-task] task={task.task_id} sending request to Gemini model={gemini.model}")
+        job_try = int(ctx.get("job_try", 1))
+        model_name, model_phase, model_attempt, model_attempts_total = _select_gemini_model_for_retry(job_try)
+        logger.info(
+            f"[gemini-task] task={task.task_id} sending request to Gemini "
+            f"model={model_name} phase={model_phase} attempt={model_attempt}/{model_attempts_total} overall_try={job_try}"
+        )
         result = await gemini.generate_image(
             prompt=task.prompt,
             images=inputs,
             resolution=task.resolution,
             aspect_ratio=task.aspect_ratio,
             google_search=task.google_search,
+            model=model_name,
         )
         logger.info(
             f"[gemini-task] task={task.task_id} received Gemini response "
@@ -354,14 +384,21 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
         await _finalize_gemini_task(session, task, result_image_url=result_url)
     except GeminiError as e:
         job_try = int(ctx.get("job_try", 1))
-        max_retries = _gemini_max_retries()
+        max_retries = _gemini_total_max_retries()
+        current_model, current_phase, current_attempt, current_attempts_total = _select_gemini_model_for_retry(job_try)
+        next_try = job_try + 1
+        next_model, next_phase, next_attempt, next_attempts_total = _select_gemini_model_for_retry(next_try)
         if e.retryable and job_try <= max_retries:
             task.status = "queued"
             task.error_message = f"Temporary provider error, retry {job_try}/{max_retries}"
             await session.commit()
             logger.warning(
                 f"[gemini-task] task={task.task_id} scheduling retry "
-                f"retry={job_try}/{max_retries} defer={_retry_defer_seconds(job_try)}s error={e}"
+                f"retry={job_try}/{max_retries} defer={_retry_defer_seconds(job_try)}s "
+                f"current_model={current_model} current_phase={current_phase} "
+                f"current_attempt={current_attempt}/{current_attempts_total} "
+                f"next_model={next_model} next_phase={next_phase} "
+                f"next_attempt={next_attempt}/{next_attempts_total} error={e}"
             )
             raise Retry(defer=_retry_defer_seconds(job_try))
 
