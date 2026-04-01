@@ -11,9 +11,10 @@ SUPPORTED_ASPECT_RATIOS = ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:1
 
 
 class GeminiError(Exception):
-    def __init__(self, message: str, *, retryable: bool = False):
+    def __init__(self, message: str, *, retryable: bool = False, user_message: str | None = None):
         super().__init__(message)
         self.retryable = retryable
+        self.user_message = user_message
 
 
 class GeminiClient:
@@ -35,6 +36,19 @@ class GeminiClient:
             write=self.write_timeout,
             pool=self.connect_timeout,
         )
+
+    @staticmethod
+    def _extract_user_message(parts: list[dict]) -> str | None:
+        texts: list[str] = []
+        for part in parts:
+            text = str(part.get("text") or "").strip()
+            if text:
+                texts.append(text)
+
+        if not texts:
+            return None
+
+        return "\n".join(texts)
 
     async def generate_image(
         self,
@@ -130,6 +144,7 @@ class GeminiClient:
                 }
 
         candidate = (data.get("candidates") or [{}])[0]
+        user_message = self._extract_user_message(parts)
         logger.error(
             "[gemini-client] response without image "
             f"model={selected_model} "
@@ -138,4 +153,7 @@ class GeminiClient:
             f"text_parts={json.dumps([part.get('text') for part in parts if part.get('text')], ensure_ascii=False)[:1000]} "
             f"response_snippet={json.dumps(data, ensure_ascii=False)[:2000]}"
         )
-        raise GeminiError("Gemini response does not contain an image")
+        raise GeminiError(
+            "Gemini response does not contain an image",
+            user_message=user_message,
+        )

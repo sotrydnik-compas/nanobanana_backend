@@ -403,7 +403,7 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
             raise Retry(defer=_retry_defer_seconds(job_try))
 
         logger.error(f"Gemini generation failed for task {task.task_id}: {e}")
-        await _finalize_gemini_task(session, task, error_message=str(e))
+        await _finalize_gemini_task(session, task, error_message=e.user_message or str(e))
     except Exception as e:
         logger.exception(f"Unexpected Gemini task error for {task.task_id}: {e}")
         await _finalize_gemini_task(session, task, error_message=str(e))
