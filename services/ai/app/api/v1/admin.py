@@ -82,7 +82,7 @@ async def admin_create_template(
     # Проверка уникальности имени
     existing = await session.execute(select(PromptTemplate).where(PromptTemplate.name == name))
     if existing.scalar_one_or_none():
-        raise HTTPException(400, f"Template with name '{name}' already exists")
+        raise HTTPException(400, f"Шаблон с именем '{name}' уже существует")
 
     template = PromptTemplate(name=name, template_text=template_text, is_active=is_active)
     session.add(template)
@@ -92,7 +92,7 @@ async def admin_create_template(
         await session.refresh(template)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(400, f"Template with name '{name}' already exists")
+        raise HTTPException(400, f"Шаблон с именем '{name}' уже существует")
 
     return {
         "id": template.id,
@@ -115,7 +115,7 @@ async def admin_get_template(
     """
     template = await session.get(PromptTemplate, template_id)
     if not template:
-        raise HTTPException(404, "Template not found")
+        raise HTTPException(404, "Шаблон не найден")
 
     # Получаем варианты
     variants_result = await session.execute(
@@ -161,7 +161,7 @@ async def admin_update_template(
     """
     template = await session.get(PromptTemplate, template_id)
     if not template:
-        raise HTTPException(404, "Template not found")
+        raise HTTPException(404, "Шаблон не найден")
 
     if name is not None:
         # Проверка уникальности нового имени
@@ -170,7 +170,7 @@ async def admin_update_template(
                 select(PromptTemplate).where(PromptTemplate.name == name, PromptTemplate.id != template_id)
             )
             if existing.scalar_one_or_none():
-                raise HTTPException(400, f"Template with name '{name}' already exists")
+                raise HTTPException(400, f"Шаблон с именем '{name}' уже существует")
         template.name = name
 
     if template_text is not None:
@@ -184,7 +184,7 @@ async def admin_update_template(
         await session.refresh(template)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(400, "Template name must be unique")
+        raise HTTPException(400, "Имя шаблона должно быть уникальным")
 
     return {
         "id": template.id,
@@ -207,7 +207,7 @@ async def admin_delete_template(
     """
     template = await session.get(PromptTemplate, template_id)
     if not template:
-        raise HTTPException(404, "Template not found")
+        raise HTTPException(404, "Шаблон не найден")
 
     await session.delete(template)
     await session.commit()
@@ -228,7 +228,7 @@ async def admin_list_variants(
     # Проверка существования шаблона
     template = await session.get(PromptTemplate, template_id)
     if not template:
-        raise HTTPException(404, "Template not found")
+        raise HTTPException(404, "Шаблон не найден")
 
     query = select(PromptVariant).where(PromptVariant.template_id == template_id)
 
@@ -272,7 +272,7 @@ async def admin_create_variant(
     # Проверка существования шаблона
     template = await session.get(PromptTemplate, template_id)
     if not template:
-        raise HTTPException(404, "Template not found")
+        raise HTTPException(404, "Шаблон не найден")
 
     variant = PromptVariant(
         template_id=template_id, key=key, label=label, sort_order=sort_order, is_active=is_active
@@ -284,7 +284,7 @@ async def admin_create_variant(
         await session.refresh(variant)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(400, f"Variant with key '{key}' already exists for this template")
+        raise HTTPException(400, f"Вариант с ключом '{key}' уже существует для этого шаблона")
 
     return {
         "id": variant.id,
@@ -312,7 +312,7 @@ async def admin_update_variant(
     """
     variant = await session.get(PromptVariant, variant_id)
     if not variant:
-        raise HTTPException(404, "Variant not found")
+        raise HTTPException(404, "Вариант не найден")
 
     if key is not None:
         # Проверка уникальности ключа в рамках шаблона
@@ -325,7 +325,7 @@ async def admin_update_variant(
                 )
             )
             if existing.scalar_one_or_none():
-                raise HTTPException(400, f"Variant with key '{key}' already exists for this template")
+                raise HTTPException(400, f"Вариант с ключом '{key}' уже существует для этого шаблона")
         variant.key = key
 
     if label is not None:
@@ -342,7 +342,7 @@ async def admin_update_variant(
         await session.refresh(variant)
     except IntegrityError:
         await session.rollback()
-        raise HTTPException(400, "Variant key must be unique within template")
+        raise HTTPException(400, "Ключ варианта должен быть уникальным в рамках шаблона")
 
     return {
         "id": variant.id,
@@ -366,7 +366,7 @@ async def admin_delete_variant(
     """
     variant = await session.get(PromptVariant, variant_id)
     if not variant:
-        raise HTTPException(404, "Variant not found")
+        raise HTTPException(404, "Вариант не найден")
 
     await session.delete(variant)
     await session.commit()
@@ -436,10 +436,10 @@ async def admin_upload_samples(
     и создает записи в БД. Только для администраторов.
     """
     if not files:
-        raise HTTPException(400, detail="No files uploaded")
+        raise HTTPException(400, detail="Файлы не загружены")
 
     if len(files) > 10:
-        raise HTTPException(400, detail="Maximum 10 files per request")
+        raise HTTPException(400, detail="Максимум 10 файлов за один запрос")
 
     # Сохраняем файлы
     try:
@@ -448,7 +448,7 @@ async def admin_upload_samples(
         raise e
     except Exception as e:
         logger.error(f"Error saving files: {e}")
-        raise HTTPException(500, detail=f"Error saving files: {str(e)}")
+        raise HTTPException(500, detail=f"Ошибка сохранения файлов: {str(e)}")
 
     # Создаем записи в БД
     created_samples = []
@@ -475,7 +475,7 @@ async def admin_upload_samples(
                 pass
         await session.rollback()
         logger.error(f"Database error: {e}")
-        raise HTTPException(500, detail=f"Database error: {str(e)}")
+        raise HTTPException(500, detail=f"Ошибка базы данных: {str(e)}")
 
     # Формируем ответ
     base_url = "/media"
@@ -505,7 +505,7 @@ async def admin_update_sample(
     """
     sample = await session.get(Sample, sample_id)
     if not sample:
-        raise HTTPException(404, "Sample not found")
+        raise HTTPException(404, "Семпл не найден")
 
     sample.is_active = is_active
     await session.commit()
@@ -524,7 +524,7 @@ async def admin_delete_sample(
     """
     sample = await session.get(Sample, sample_id)
     if not sample:
-        raise HTTPException(404, "Sample not found")
+        raise HTTPException(404, "Семпл не найден")
 
     # Удаляем файл
     if sample.path:

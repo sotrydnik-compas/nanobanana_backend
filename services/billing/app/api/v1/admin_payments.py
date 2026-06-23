@@ -103,7 +103,7 @@ async def add_user_balance(
     _: dict = Depends(require_admin),
 ):
     if requests_amount < 0:
-        raise HTTPException(400, "requests_amount must be >= 0")
+        raise HTTPException(400, "Поле requests_amount должно быть >= 0")
 
     balance = await session.get(UserBalance, user_id)
     if balance:
@@ -132,12 +132,12 @@ async def upd_user_balance(
     _: dict = Depends(require_admin),
 ):
     if requests_amount < 0:
-        raise HTTPException(400, "requests_amount must be >= 0")
+        raise HTTPException(400, "Поле requests_amount должно быть >= 0")
 
     ub = (await session.execute(select(UserBalance).where(UserBalance.user_id == user_id))).scalars().first()
 
     if not ub:
-        raise HTTPException(404, "Balance not found")
+        raise HTTPException(404, "Баланс не найден")
 
     await session.execute(
         update(UserBalance).where(UserBalance.user_id == user_id).values(requests_left=requests_amount)

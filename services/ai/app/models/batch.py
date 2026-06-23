@@ -27,6 +27,8 @@ class BatchJob(Base, TimestampMixin):
     output_format: Mapped[str] = mapped_column(String(8), nullable=True, default="png")
     google_search: Mapped[bool] = mapped_column(Boolean, nullable=True, default=True)
     common_refs_json: Mapped[str] = mapped_column(Text, nullable=True, default="[]")
+    expected_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_chunk_received: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
 
     total_count: Mapped[int] = mapped_column(Integer, nullable=False)
     processed_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -59,6 +61,7 @@ class BatchItem(Base, TimestampMixin):
 
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     local_file: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    chunk_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(

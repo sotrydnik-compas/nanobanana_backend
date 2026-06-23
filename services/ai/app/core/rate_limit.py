@@ -25,7 +25,7 @@ def _fallback_check(key: str, *, limit: int, window: int) -> None:
         q.popleft()
 
     if len(q) >= limit:
-        raise HTTPException(status_code=429, detail="Too Many Requests")
+        raise HTTPException(status_code=429, detail="Слишком много запросов. Попробуйте позже.")
 
     q.append(now)
 
@@ -48,7 +48,7 @@ async def _redis_check(key: str, *, limit: int, window: int) -> None:
 
     if int(count) >= limit:
         await r.zrem(key, member)
-        raise HTTPException(status_code=429, detail="Too Many Requests")
+        raise HTTPException(status_code=429, detail="Слишком много запросов. Попробуйте позже.")
 
 
 async def _check_limit(key: str, *, limit: int, window: int) -> None:

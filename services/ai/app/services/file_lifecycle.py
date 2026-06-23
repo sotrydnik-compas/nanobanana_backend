@@ -193,9 +193,9 @@ async def cleanup_chat_media(session: AsyncSession, chat_id: str) -> int:
         deleted += await cleanup_batch_storage(
             session,
             batch,
-            include_item_uploads=batch.status not in ("pending", "processing", "cancelling"),
+            include_item_uploads=batch.status not in ("processing", "cancelling"),
             include_results=True,
-            include_common_refs=batch.status not in ("pending", "processing", "cancelling"),
+            include_common_refs=batch.status not in ("processing", "cancelling"),
         )
 
     return deleted
@@ -242,6 +242,32 @@ async def cleanup_expired_generated_media(session: AsyncSession, *, retention_da
     return deleted
 
 
+async def cleanup_stale_pending_batches(session: AsyncSession, *, retention_hours: int) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
+    batches = (
+        await session.execute(
+            select(BatchJob).where(
+                BatchJob.status == "pending",
+                BatchJob.updated_at < cutoff,
+            )
+        )
+    ).scalars().all()
+
+    deleted = 0
+    for batch in batches:
+        deleted += await cleanup_batch_storage(
+            session,
+            batch,
+            include_item_uploads=True,
+            include_results=False,
+            include_common_refs=True,
+        )
+        batch.status = "cancelled"
+        batch.completed_at = datetime.now(timezone.utc)
+
+    return deleted
+
+
 async def cleanup_chat_deleted_result_if_needed(session: AsyncSession, task: Task) -> bool:
     if not task.chat_id or not task.result_image_url:
         return False
@@ -267,5 +293,9 @@ async def run_media_cleanup(session: AsyncSession) -> int:
     deleted += await cleanup_expired_generated_media(
         session,
         retention_days=settings.GENERATED_IMAGE_RETENTION_DAYS,
+    )
+    deleted += await cleanup_stale_pending_batches(
+        session,
+        retention_hours=settings.BATCH_PENDING_RETENTION_HOURS,
     )
     return deleted

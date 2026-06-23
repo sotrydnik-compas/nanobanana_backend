@@ -21,7 +21,7 @@ def _now():
 async def check_admin_access(current_user: User) -> None:
     """Проверка прав администратора"""
     if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise HTTPException(status_code=403, detail="Требуются права администратора")
 
 
 @router.post("/admin/users")
@@ -39,18 +39,18 @@ async def admin_create_user(
     """
     email_n = (email or "").strip().lower()
     if not email_n or "@" not in email_n:
-        raise HTTPException(400, "Invalid email")
+        raise HTTPException(400, "Некорректный email")
 
     if not password:
-        raise HTTPException(400, "Password cannot be empty")
+        raise HTTPException(400, "Пароль не может быть пустым")
 
     if role not in ["user", "admin"]:
-        raise HTTPException(400, "Role must be 'user' or 'admin'")
+        raise HTTPException(400, "Роль должна быть 'user' или 'admin'")
 
     # Проверка уникальности email
     exists = (await session.execute(select(User.id).where(User.email == email_n))).first()
     if exists:
-        raise HTTPException(409, "Email already registered")
+        raise HTTPException(409, "Адрес электронной почты уже зарегистрирован")
 
     # Создание пользователя
     u = User(
@@ -92,28 +92,28 @@ async def admin_update_user(
     """
     u = await session.get(User, user_id)
     if not u:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "Пользователь не найден")
 
     if email is not None:
         email_n = (email or "").strip().lower()
         if not email_n or "@" not in email_n:
-            raise HTTPException(400, "Invalid email")
+            raise HTTPException(400, "Некорректный email")
 
         # Проверка уникальности нового email
         if email_n != u.email:
             exists = (await session.execute(select(User.id).where(User.email == email_n))).first()
             if exists:
-                raise HTTPException(409, "Email already in use")
+                raise HTTPException(409, "Адрес электронной почты уже используется")
             u.email = email_n
 
     if password is not None:
         if not password:
-            raise HTTPException(400, "Password cannot be empty")
+            raise HTTPException(400, "Пароль не может быть пустым")
         u.password_hash = hash_password(password)
 
     if role is not None:
         if role not in ["user", "admin"]:
-            raise HTTPException(400, "Role must be 'user' or 'admin'")
+            raise HTTPException(400, "Роль должна быть 'user' или 'admin'")
         u.role = role
 
     if is_active is not None:
@@ -213,7 +213,7 @@ async def admin_get_user(
     """
     u = await session.get(User, user_id)
     if not u:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "Пользователь не найден")
 
     # Получение количества активных сессий
     sessions_query = select(func.count()).where(
@@ -247,7 +247,7 @@ async def admin_logout_user_all_sessions(
     """
     u = await session.get(User, user_id)
     if not u:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "Пользователь не найден")
 
     # Получаем все активные refresh сессии
     refresh_sessions = await session.execute(
@@ -285,7 +285,7 @@ async def admin_delete_user(
     # Поиск пользователя
     u = await session.get(User, user_id)
     if not u:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "Пользователь не найден")
 
     if permanent:
         # Полное удаление

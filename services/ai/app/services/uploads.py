@@ -75,7 +75,7 @@ async def save_sample_images(uploads: List[UploadFile], max_bytes: int = 10 * 10
                         os.remove(full_path)
                 except Exception:
                     pass
-            raise HTTPException(400, detail=f"Error saving file {upload.filename}: {e.detail}")
+            raise HTTPException(400, detail=f"Ошибка сохранения файла {upload.filename}: {e.detail}")
 
     return saved_paths
 

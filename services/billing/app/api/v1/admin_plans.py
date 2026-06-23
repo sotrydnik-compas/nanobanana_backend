@@ -42,7 +42,7 @@ async def _ensure_single_system_plan(
 
     exists = (await session.execute(query)).first()
     if exists:
-        raise HTTPException(409, "Only one system plan is allowed")
+        raise HTTPException(409, "Разрешен только один системный тариф")
 
 
 @router.get("/admin/plans")
@@ -68,13 +68,13 @@ async def admin_create_plan(
 ):
     title = (title or "").strip()
     if not title:
-        raise HTTPException(400, "title is required")
+        raise HTTPException(400, "Поле title обязательно")
     if len(title) > 64:
-        raise HTTPException(400, "title too long")
+        raise HTTPException(400, "Поле title слишком длинное")
     if price_minor < 0:
-        raise HTTPException(400, "price_minor must be >= 0")
+        raise HTTPException(400, "Поле price_minor должно быть >= 0")
     if requests_total <= 0:
-        raise HTTPException(400, "requests_total must be > 0")
+        raise HTTPException(400, "Поле requests_total должно быть > 0")
 
     await _ensure_single_system_plan(session, requested_is_system=bool(is_system))
 
@@ -93,8 +93,8 @@ async def admin_create_plan(
     except IntegrityError:
         await session.rollback()
         if bool(is_system):
-            raise HTTPException(409, "Only one system plan is allowed")
-        raise HTTPException(409, "Plan could not be created due to a data conflict")
+            raise HTTPException(409, "Разрешен только один системный тариф")
+        raise HTTPException(409, "Не удалось создать тариф из-за конфликта данных")
     await session.refresh(p)
     return {"plan": _to_dict(p)}
 
@@ -114,30 +114,30 @@ async def admin_update_plan(
     try:
         pid = uuid.UUID(plan_id)
     except Exception:
-        raise HTTPException(400, "Invalid plan_id")
+        raise HTTPException(400, "Некорректный plan_id")
 
     p = (await session.execute(select(Plan).where(Plan.id == pid))).scalars().first()
     if not p:
-        raise HTTPException(404, "Plan not found")
+        raise HTTPException(404, "Тариф не найден")
 
     values: dict = {}
 
     if title is not None:
         t = (title or "").strip()
         if not t:
-            raise HTTPException(400, "title must not be empty")
+            raise HTTPException(400, "Поле title не должно быть пустым")
         if len(t) > 64:
-            raise HTTPException(400, "title too long")
+            raise HTTPException(400, "Поле title слишком длинное")
         values["title"] = t
 
     if price_minor is not None:
         if price_minor < 0:
-            raise HTTPException(400, "price_minor must be >= 0")
+            raise HTTPException(400, "Поле price_minor должно быть >= 0")
         values["price_minor"] = int(price_minor)
 
     if requests_total is not None:
         if requests_total <= 0:
-            raise HTTPException(400, "requests_total must be > 0")
+            raise HTTPException(400, "Поле requests_total должно быть > 0")
         values["requests_total"] = int(requests_total)
 
     if currency is not None:
@@ -145,11 +145,11 @@ async def admin_update_plan(
 
     if is_active is not None:
         if p.is_system and not bool(is_active):
-            raise HTTPException(400, "System plan cannot be deactivated")
+            raise HTTPException(400, "Системный тариф нельзя деактивировать")
         values["is_active"] = bool(is_active)
 
     if is_system is not None:
-        raise HTTPException(400, "is_system cannot be updated for an existing plan")
+        raise HTTPException(400, "Поле is_system нельзя изменять у существующего тарифа")
 
     if p.is_system:
         values["is_purchasable"] = False
@@ -173,11 +173,11 @@ async def admin_activate_plan(
     try:
         pid = uuid.UUID(plan_id)
     except Exception:
-        raise HTTPException(400, "Invalid plan_id")
+        raise HTTPException(400, "Некорректный plan_id")
 
     p = (await session.execute(select(Plan).where(Plan.id == pid))).scalars().first()
     if not p:
-        raise HTTPException(404, "Plan not found")
+        raise HTTPException(404, "Тариф не найден")
 
     if p.is_active:
         return {"status": "ok"}
@@ -196,16 +196,16 @@ async def admin_deactivate_plan(
     try:
         pid = uuid.UUID(plan_id)
     except Exception:
-        raise HTTPException(400, "Invalid plan_id")
+        raise HTTPException(400, "Некорректный plan_id")
 
     p = (await session.execute(select(Plan).where(Plan.id == pid))).scalars().first()
     if not p:
-        raise HTTPException(404, "Plan not found")
+        raise HTTPException(404, "Тариф не найден")
 
     if not p.is_active:
         return {"status": "ok"}
     if p.is_system:
-        raise HTTPException(400, "System plan cannot be deactivated")
+        raise HTTPException(400, "Системный тариф нельзя деактивировать")
 
     await session.execute(update(Plan).where(Plan.id == pid).values(is_active=False))
     await session.commit()

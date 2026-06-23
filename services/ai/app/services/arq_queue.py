@@ -6,7 +6,7 @@ from typing import Optional
 
 from arq import Retry, create_pool
 from arq.connections import RedisSettings
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -33,6 +33,12 @@ REDIS_SETTINGS = RedisSettings.from_dsn(
 _pool = None
 billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOKEN)
 gemini = GeminiClient()
+_INLINE_NO_IMAGE_RETRIES = 1
+
+
+def _next_generation_error_message(task: Task, error_message: str) -> str:
+    # During retries we keep a consistent prefix so the frontend never treats text output as success content.
+    return error_message or "Ошибка генерации изображения: неизвестная ошибка."
 
 
 async def get_arq_pool():
@@ -168,7 +174,7 @@ async def _sync_batch_progress(session: AsyncSession, batch: BatchJob) -> None:
     batch.current_item_index = next_pending
 
 
-def _compose_batch_image_urls(batch: BatchJob, item: BatchItem) -> tuple[list[str], list[str]]:
+def _compose_batch_image_urls(batch: BatchJob, item: BatchItem) -> tuple[list[str], list[str], str | None, list[str]]:
     image_url = item.image_url
     local_files: list[str] = []
     if item.local_file:
@@ -189,7 +195,40 @@ def _compose_batch_image_urls(batch: BatchJob, item: BatchItem) -> tuple[list[st
     if image_url:
         image_urls.append(image_url)
 
-    return image_urls, local_files
+    return image_urls, local_files, image_url, common_refs
+
+
+async def _resolve_task_image_urls(session: AsyncSession, task: Task) -> list[str]:
+    if not task.batch_item_id:
+        return json.loads(task.image_urls or "[]")
+
+    batch_item = await session.get(BatchItem, task.batch_item_id)
+    if not batch_item:
+        return json.loads(task.image_urls or "[]")
+
+    batch = await session.get(BatchJob, batch_item.batch_id)
+    if not batch:
+        return json.loads(task.image_urls or "[]")
+
+    rebuilt_image_urls, rebuilt_local_files, item_image_url, common_refs = _compose_batch_image_urls(batch, batch_item)
+    stored_image_urls = json.loads(task.image_urls or "[]")
+
+    if rebuilt_image_urls != stored_image_urls:
+        logger.warning(
+            f"[batch] task={task.task_id} image order rebuilt from batch source of truth "
+            f"stored_count={len(stored_image_urls)} rebuilt_count={len(rebuilt_image_urls)} "
+            f"common_refs={len(common_refs)} item_last={bool(rebuilt_image_urls and item_image_url and rebuilt_image_urls[-1] == item_image_url)}"
+        )
+        task.image_urls = json.dumps(rebuilt_image_urls, ensure_ascii=False)
+        task.local_files = json.dumps(rebuilt_local_files, ensure_ascii=False)
+
+    logger.info(
+        f"[batch] task={task.task_id} resolved request order common_refs={len(common_refs)} "
+        f"total_images={len(rebuilt_image_urls)} item_last={bool(rebuilt_image_urls and item_image_url and rebuilt_image_urls[-1] == item_image_url)} "
+        f"first_image={rebuilt_image_urls[0] if rebuilt_image_urls else None} "
+        f"last_image={rebuilt_image_urls[-1] if rebuilt_image_urls else None}"
+    )
+    return rebuilt_image_urls
 
 
 async def _enqueue_billing_reconcile(task_id: str) -> None:
@@ -263,7 +302,7 @@ async def _finalize_gemini_task(
         task.error_message = None
     else:
         task.status = "failed"
-        task.error_message = error_message or "Generation failed"
+        task.error_message = error_message or "Ошибка генерации изображения: генерация не выполнена."
 
     if task.status == "success":
         try:
@@ -335,10 +374,14 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
     try:
         if not settings.GEMINI_API_ENABLED:
             logger.warning(f"[gemini-task] task={task.task_id} blocked: GEMINI_API_ENABLED is false")
-            await _finalize_gemini_task(session, task, error_message="Image generation is temporarily unavailable")
+            await _finalize_gemini_task(
+                session,
+                task,
+                error_message="Ошибка генерации изображения: генерация временно недоступна.",
+            )
             return
 
-        image_urls = json.loads(task.image_urls or "[]")
+        image_urls = await _resolve_task_image_urls(session, task)
         logger.info(
             f"[gemini-task] task={task.task_id} preparing request images={len(image_urls)} "
             f"resolution={task.resolution} aspect={task.aspect_ratio} "
@@ -354,14 +397,27 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
             f"[gemini-task] task={task.task_id} sending request to Gemini "
             f"model={model_name} phase={model_phase} attempt={model_attempt}/{model_attempts_total} overall_try={job_try}"
         )
-        result = await gemini.generate_image(
-            prompt=task.prompt,
-            images=inputs,
-            resolution=task.resolution,
-            aspect_ratio=task.aspect_ratio,
-            google_search=task.google_search,
-            model=model_name,
-        )
+        no_image_retry_count = 0
+        while True:
+            try:
+                result = await gemini.generate_image(
+                    prompt=task.prompt,
+                    images=inputs,
+                    resolution=task.resolution,
+                    aspect_ratio=task.aspect_ratio,
+                    google_search=task.google_search,
+                    model=model_name,
+                )
+                break
+            except GeminiError as e:
+                if e.reason == "no_image_response" and no_image_retry_count < _INLINE_NO_IMAGE_RETRIES:
+                    no_image_retry_count += 1
+                    logger.warning(
+                        f"[gemini-task] task={task.task_id} response_without_image "
+                        f"model={model_name} inline_retry={no_image_retry_count}/{_INLINE_NO_IMAGE_RETRIES}"
+                    )
+                    continue
+                raise
         logger.info(
             f"[gemini-task] task={task.task_id} received Gemini response "
             f"mime={result['mime_type']} bytes={len(result['image_bytes'])}"
@@ -390,7 +446,10 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
         next_model, next_phase, next_attempt, next_attempts_total = _select_gemini_model_for_retry(next_try)
         if e.retryable and job_try <= max_retries:
             task.status = "queued"
-            task.error_message = f"Temporary provider error, retry {job_try}/{max_retries}"
+            task.error_message = _next_generation_error_message(
+                task,
+                "Ошибка генерации изображения: временная ошибка. Выполняется повтор.",
+            )
             await session.commit()
             logger.warning(
                 f"[gemini-task] task={task.task_id} scheduling retry "
@@ -403,10 +462,21 @@ async def _execute_gemini_task(session: AsyncSession, task: Task, ctx: dict) -> 
             raise Retry(defer=_retry_defer_seconds(job_try))
 
         logger.error(f"Gemini generation failed for task {task.task_id}: {e}")
-        await _finalize_gemini_task(session, task, error_message=e.user_message or str(e))
+        await _finalize_gemini_task(
+            session,
+            task,
+            error_message=_next_generation_error_message(task, e.user_message or str(e)),
+        )
     except Exception as e:
         logger.exception(f"Unexpected Gemini task error for {task.task_id}: {e}")
-        await _finalize_gemini_task(session, task, error_message=str(e))
+        await _finalize_gemini_task(
+            session,
+            task,
+            error_message=_next_generation_error_message(
+                task,
+                "Ошибка генерации изображения: внутренняя ошибка.",
+            ),
+        )
 
 
 async def reconcile_gemini_task_billing(ctx, task_id: str) -> None:
@@ -513,7 +583,7 @@ async def recover_gemini_tasks(ctx) -> None:
                 await _mark_task_failed_without_billing(
                     session,
                     task,
-                    error_message="Task interrupted before reservation was finalized",
+                    error_message="Ошибка генерации изображения: задача была прервана до завершения резервирования.",
                 )
                 if task.batch_item_id:
                     batch_item = await session.get(BatchItem, task.batch_item_id)
@@ -583,7 +653,7 @@ async def process_batch_item(
 
         request_id = str(uuid.uuid4())
         try:
-            image_urls, local_files = _compose_batch_image_urls(batch, item)
+            image_urls, local_files, item_image_url, common_refs = _compose_batch_image_urls(batch, item)
             task_id = uuid.uuid4().hex
             task = Task(
                 task_id=task_id,
@@ -608,11 +678,17 @@ async def process_batch_item(
             logger.info(
                 f"[batch] created local gemini task={task_id} item={item_id} batch={batch_id} status=waiting_billing"
             )
+            logger.info(
+                f"[batch] task={task_id} request order prepared common_refs={len(common_refs)} "
+                f"total_images={len(image_urls)} item_last={bool(image_urls and item_image_url and image_urls[-1] == item_image_url)} "
+                f"first_image={image_urls[0] if image_urls else None} "
+                f"last_image={image_urls[-1] if image_urls else None}"
+            )
 
             meta = {
                 "batch": True,
                 "batch_item_index": item_index,
-                "image_url": item.image_url,
+                "image_url": item_image_url,
                 "common_refs_count": len(_load_batch_common_refs(batch)),
                 "googleSearch": batch.google_search,
                 "outputFormat": batch.output_format,
@@ -637,8 +713,8 @@ async def process_batch_item(
                 await _mark_task_failed_without_billing(
                     session,
                     task,
-                    error_message="Not enough requests to process this item",
-                    assistant_content=f"Недостаточно средств для обработки элемента {item_index + 1}/{batch.total_count}",
+                    error_message="Недостаточно запросов для обработки элемента.",
+                    assistant_content=f"Недостаточно запросов для обработки элемента {item_index + 1}/{batch.total_count}.",
                 )
                 await session.refresh(batch)
                 await _sync_batch_progress(session, batch)
@@ -650,8 +726,8 @@ async def process_batch_item(
                 await _mark_task_failed_without_billing(
                     session,
                     task,
-                    error_message=f"Billing error: {str(e)}",
-                    assistant_content=f"Ошибка биллинга при обработке элемента {item_index + 1}/{batch.total_count}: {str(e)}",
+                    error_message="Сервис оплаты недоступен.",
+                    assistant_content=f"Сервис оплаты недоступен при обработке элемента {item_index + 1}/{batch.total_count}.",
                 )
                 await session.refresh(batch)
                 await _sync_batch_progress(session, batch)
@@ -668,9 +744,7 @@ async def process_batch_item(
                 await enqueue_job_once("process_gemini_task", task_id, _job_id=f"gemini-task:{task_id}")
                 logger.info(f"[batch] enqueued Gemini task worker job for task={task_id}")
             except Exception as enqueue_error:
-                raise RuntimeError(
-                    f"Failed to enqueue Gemini task {task_id} for batch item {item_id}: {enqueue_error}"
-                ) from enqueue_error
+                raise RuntimeError("Очередь временно недоступна.") from enqueue_error
 
             await session.refresh(item)
             await session.refresh(batch)
@@ -690,8 +764,9 @@ async def process_batch_item(
             except Exception as billing_error:
                 logger.error(f"Failed to cancel billing after error: {billing_error}")
 
+            public_error_message = str(e).strip() or "Внутренняя ошибка обработки элемента."
             item.status = "failed"
-            item.error_message = str(e)
+            item.error_message = public_error_message
             item.completed_at = datetime.now(timezone.utc)
             await _sync_batch_progress(session, batch)
             batch.current_item_index = item_index + 1
@@ -702,8 +777,8 @@ async def process_batch_item(
                 chat_id=batch.chat_id,
                 user_id=batch.user_id,
                 role="assistant",
-                content=f"Системная ошибка при обработке элемента {item_index + 1}/{batch.total_count}: {str(e)}",
-                meta={"batch_item_error": True}
+                content=f"Ошибка при обработке элемента {item_index + 1}/{batch.total_count}: {public_error_message}",
+                meta={"batch_item_error": True, "errorMessage": public_error_message}
             )
             await session.commit()
 
@@ -761,6 +836,19 @@ async def start_batch_processing(ctx, batch_id: str):
         if not batch:
             logger.error(f"Batch {batch_id} not found")
             return
+
+        item_count = await session.scalar(
+            select(func.count()).select_from(BatchItem).where(BatchItem.batch_id == batch_id)
+        )
+        item_count = int(item_count or 0)
+        if batch.status == "pending":
+            expected_count = batch.expected_count or batch.total_count
+            if not batch.last_chunk_received or item_count < expected_count:
+                logger.warning(
+                    f"Batch {batch_id} is not ready for processing yet: "
+                    f"received={item_count} expected={expected_count} last_chunk_received={batch.last_chunk_received}"
+                )
+                return
 
         if batch.status == "pending":
             res = await session.execute(

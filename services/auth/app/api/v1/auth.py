@@ -44,7 +44,7 @@ async def register(
 ):
     email_n = (email or "").strip().lower()
     if not email_n or "@" not in email_n:
-        raise HTTPException(400, "Invalid email")
+        raise HTTPException(400, "Некорректный email")
 
     is_valid, msg = validate_password_strength(password)
     if not is_valid:
@@ -52,7 +52,7 @@ async def register(
 
     exists = (await session.execute(select(User.id).where(User.email == email_n))).first()
     if exists:
-        raise HTTPException(409, "Email already registered")
+        raise HTTPException(409, "Адрес электронной почты уже зарегистрирован")
 
     u = User(email=email_n, password_hash=hash_password(password), role="user", email_verified=False)
     session.add(u)
@@ -97,22 +97,22 @@ async def verify_email(
 ):
     email_n = (email or "").strip().lower()
     if not email_n or "@" not in email_n:
-        raise HTTPException(400, "Invalid email")
+        raise HTTPException(400, "Некорректный email")
     if not code or len(code) != 6:
-        raise HTTPException(400, "Invalid code")
+        raise HTTPException(400, "Некорректный код")
 
     ok = await verify_code("verify", email_n, code, consume_on_success=False)
     if not ok:
-        raise HTTPException(400, "Invalid or expired code")
+        raise HTTPException(400, "Некорректный или просроченный код")
 
     u = (await session.execute(select(User).where(User.email == email_n))).scalars().first()
     if not u:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "Пользователь не найден")
 
     try:
         await billing.grant_signup_system_plan(u.id)
-    except BillingError as e:
-        raise HTTPException(503, f"Billing unavailable: {e}")
+    except BillingError:
+        raise HTTPException(503, "Сервис оплаты временно недоступен")
 
     u.email_verified = True
     await session.commit()
@@ -130,11 +130,11 @@ async def login(
     u = (await session.execute(select(User).where(User.email == email_n))).scalars().first()
 
     if not u or not verify_password(password, u.password_hash):
-        raise HTTPException(401, "Invalid credentials")
+        raise HTTPException(401, "Неверный email или пароль")
     if not u.is_active:
-        raise HTTPException(403, "User inactive")
+        raise HTTPException(403, "Пользователь деактивирован")
     if not u.email_verified:
-        raise HTTPException(403, "Email not verified")
+        raise HTTPException(403, "Адрес электронной почты не подтвержден")
 
     access = create_access_token(u.id, u.email, u.role)
     refresh = create_refresh_token(u.id)
@@ -157,24 +157,24 @@ async def refresh(
 ):
     payload, err = safe_decode_token(refresh_token)
     if err or not payload or payload.get("typ") != "refresh":
-        raise HTTPException(401, "Invalid refresh token")
+        raise HTTPException(401, "Недействительный refresh-токен")
 
     user_id = payload.get("sub")
     jti = payload.get("jti")
     if not user_id or not jti:
-        raise HTTPException(401, "Invalid refresh token")
+        raise HTTPException(401, "Недействительный refresh-токен")
 
     rs = (await session.execute(select(RefreshSession).where(RefreshSession.jti == jti))).scalars().first()
     if not rs or rs.revoked_at is not None:
-        raise HTTPException(401, "Refresh token revoked")
+        raise HTTPException(401, "Refresh-токен отозван")
 
     rs.revoked_at = _now()
 
     u = await session.get(User, user_id)
     if not u or not u.is_active:
-        raise HTTPException(401, "User not found")
+        raise HTTPException(401, "Пользователь не найден")
     if not u.email_verified:
-        raise HTTPException(403, "Email not verified")
+        raise HTTPException(403, "Адрес электронной почты не подтвержден")
 
     access = create_access_token(u.id, u.email, u.role)
     new_refresh = create_refresh_token(u.id)
@@ -257,11 +257,11 @@ async def reset_confirm(
 
     ok = await verify_code("reset", email_n, code)
     if not ok:
-        raise HTTPException(400, "Invalid or expired code")
+        raise HTTPException(400, "Некорректный или просроченный код")
 
     u = (await session.execute(select(User).where(User.email == email_n))).scalars().first()
     if not u:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, "Пользователь не найден")
 
     u.password_hash = hash_password(new_password)
 

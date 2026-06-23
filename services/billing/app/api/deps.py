@@ -6,32 +6,32 @@ from app.services.blacklist import is_blacklisted
 
 async def require_internal_token(x_internal_token: str | None = Header(default=None, alias="X-Internal-Token")):
     if not x_internal_token or x_internal_token != settings.INTERNAL_TOKEN:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Недействительный внутренний токен")
 
 
 async def get_current_user(authorization: str | None = Header(default=None)):
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Bearer token")
+        raise HTTPException(status_code=401, detail="Отсутствует Bearer-токен")
 
     token = authorization.split(" ", 1)[1].strip()
     try:
         payload = decode_access_token(token)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Недействительный токен")
 
     if payload.get("typ") != "access":
-        raise HTTPException(status_code=401, detail="Invalid token type")
+        raise HTTPException(status_code=401, detail="Неверный тип токена")
 
     jti = payload.get("jti")
     if not jti:
-        raise HTTPException(status_code=401, detail="Missing jti")
+        raise HTTPException(status_code=401, detail="Отсутствует jti")
 
     if await is_blacklisted(jti):
-        raise HTTPException(status_code=401, detail="Token revoked")
+        raise HTTPException(status_code=401, detail="Токен отозван")
 
     user_id = payload.get("sub")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Missing sub")
+        raise HTTPException(status_code=401, detail="Отсутствует sub")
 
     return {
         "user_id": str(user_id),
@@ -50,5 +50,5 @@ def _is_admin_role(role: str | None) -> bool:
 
 async def require_admin(user=Depends(get_current_user)):
     if not _is_admin_role(user.get("role")):
-        raise HTTPException(status_code=403, detail="Admin only")
+        raise HTTPException(status_code=403, detail="Доступ только для администратора")
     return user

@@ -49,6 +49,7 @@ class Settings(BaseSettings):
 
     MEDIA_DIR: str = "media"
     GENERATED_IMAGE_RETENTION_DAYS: int = 60
+    BATCH_PENDING_RETENTION_HOURS: int = 24
     AUTO_CREATE_TABLES: bool = False
     STORE_RESULTS: bool = False
 

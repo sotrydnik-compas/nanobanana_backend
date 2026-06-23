@@ -16,7 +16,7 @@ router = APIRouter(tags=["chats"])
 async def _get_chat_owned(session: AsyncSession, chat_id: str, user_id: str) -> Chat:
     chat = await session.get(Chat, chat_id)
     if not chat or chat.deleted_at is not None:
-        raise HTTPException(status_code=404, detail="Chat not found")
+        raise HTTPException(status_code=404, detail="Чат не найден")
 
     # “claim” старых чатов после добавления user_id
     if chat.user_id is None:
@@ -25,7 +25,7 @@ async def _get_chat_owned(session: AsyncSession, chat_id: str, user_id: str) -> 
         await session.refresh(chat)
 
     if chat.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
 
     return chat
 

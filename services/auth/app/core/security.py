@@ -74,15 +74,15 @@ def validate_password_strength(password: str) -> tuple[bool, str]:
     - только латиница
     """
     if not password or len(password) < 8:
-        return False, "Password must be at least 8 characters"
+        return False, "Пароль должен содержать не менее 8 символов"
 
     if not re.search(r'[a-z]', password):
-        return False, "Password must contain at least one lowercase letter"
+        return False, "Пароль должен содержать хотя бы одну строчную латинскую букву"
 
     if not re.search(r'[A-Z]', password):
-        return False, "Password must contain at least one uppercase letter"
+        return False, "Пароль должен содержать хотя бы одну заглавную латинскую букву"
 
     if not re.match(r'^[A-Za-z0-9!@#$%^&*()_+\-=\[\]{};:\'",.<>/?\\|`~]+$', password):
-        return False, "Password can only contain Latin letters, numbers, and special characters"
+        return False, "Пароль может содержать только латинские буквы, цифры и специальные символы"
 
     return True, ""

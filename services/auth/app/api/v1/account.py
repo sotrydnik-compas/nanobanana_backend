@@ -29,7 +29,7 @@ async def change_password(
     session: AsyncSession = Depends(get_async_session),
 ):
     if not verify_password(old_password, user.password_hash):
-        raise HTTPException(400, "Invalid old password")
+        raise HTTPException(400, "Неверный текущий пароль")
 
     is_valid, msg = validate_password_strength(new_password)
     if not is_valid:
@@ -55,14 +55,14 @@ async def change_email(
 ):
     new_email_n = (new_email or "").strip().lower()
     if not new_email_n or "@" not in new_email_n:
-        raise HTTPException(400, "Invalid email")
+        raise HTTPException(400, "Некорректный email")
 
     if not verify_password(password, user.password_hash):
-        raise HTTPException(400, "Invalid password")
+        raise HTTPException(400, "Неверный пароль")
 
     exists = (await session.execute(select(User.id).where(User.email == new_email_n))).first()
     if exists:
-        raise HTTPException(409, "Email already in use")
+        raise HTTPException(409, "Адрес электронной почты уже используется")
 
     if await in_cooldown("change", new_email_n):
         return {"status": "ok", "sent": False}
@@ -92,15 +92,15 @@ async def confirm_email_change(
     r = get_redis()
     new_email_n = await r.get(f"pending_email:{user.id}")
     if not new_email_n:
-        raise HTTPException(400, "No pending email change")
+        raise HTTPException(400, "Нет ожидающего подтверждения изменения адреса электронной почты")
 
     ok = await verify_code("change", new_email_n, code)
     if not ok:
-        raise HTTPException(400, "Invalid or expired code")
+        raise HTTPException(400, "Некорректный или просроченный код")
 
     exists = (await session.execute(select(User.id).where(User.email == new_email_n))).first()
     if exists:
-        raise HTTPException(409, "Email already in use")
+        raise HTTPException(409, "Адрес электронной почты уже используется")
 
     user.email = new_email_n
     user.email_verified = True

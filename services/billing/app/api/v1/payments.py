@@ -38,7 +38,7 @@ async def create_payment(
 ):
     if not settings.PAYMENT_ENABLED:
         logger.warning("PAYMENT_ENABLED=False, пропускаем create_payment_operation")
-        raise HTTPException(400, "Payments are disabled")
+        raise HTTPException(400, "Платежи отключены")
 
     user_id = user["user_id"]
     user_email = user['email']
@@ -46,7 +46,7 @@ async def create_payment(
     try:
         pid = uuid.UUID(plan_id)
     except Exception:
-        raise HTTPException(400, "Invalid plan_id")
+        raise HTTPException(400, "Некорректный plan_id")
 
     plan = (
         (await session.execute(select(Plan).where(Plan.id == pid, Plan.is_active.is_(True))))
@@ -54,9 +54,9 @@ async def create_payment(
         .first()
     )
     if not plan:
-        raise HTTPException(404, "Plan not found")
+        raise HTTPException(404, "Тариф не найден")
     if not plan.is_purchasable:
-        raise HTTPException(400, "Plan is not available for purchase")
+        raise HTTPException(400, "Тариф недоступен для покупки")
 
     p = Payment(
         user_id=user_id,
@@ -115,18 +115,18 @@ async def create_payment(
         logger.error(f"[tochka] create_payment error: {e}")
         p.status = "failed"
         await session.commit()
-        raise HTTPException(502, "Payment provider error")
+        raise HTTPException(502, "Ошибка платежного провайдера")
     except Exception as e:
         logger.exception(f"[tochka] unexpected error: {e}")
         p.status = "failed"
         await session.commit()
-        raise HTTPException(502, "Payment provider error")
+        raise HTTPException(502, "Ошибка платежного провайдера")
 
     if not operation_id or not payment_url:
         logger.error(f"[tochka] bad response: {resp}")
         p.status = "failed"
         await session.commit()
-        raise HTTPException(502, "Payment provider error")
+        raise HTTPException(502, "Ошибка платежного провайдера")
 
     p.provider_payment_id = operation_id
     # пока просто pending (платёж не завершён)
@@ -153,7 +153,7 @@ async def get_payment_provider_info(
     try:
         puid = uuid.UUID(payment_id)
     except Exception:
-        raise HTTPException(400, "Invalid payment_id")
+        raise HTTPException(400, "Некорректный payment_id")
 
     # прочитали payment
     p = (
@@ -162,11 +162,11 @@ async def get_payment_provider_info(
         .first()
     )
     if not p:
-        raise HTTPException(404, "Payment not found")
+        raise HTTPException(404, "Платеж не найден")
     if p.user_id != user_id:
-        raise HTTPException(403, "Forbidden")
+        raise HTTPException(403, "Доступ запрещен")
     if not p.provider_payment_id:
-        raise HTTPException(409, "Provider payment not created yet")
+        raise HTTPException(409, "Платеж у провайдера еще не создан")
 
     operation_id = p.provider_payment_id
 
@@ -178,11 +178,11 @@ async def get_payment_provider_info(
         resp = await _client().get_payment_operation(operation_id)
     except TochkaError as e:
         logger.error(f"[tochka] get_payment error: {e}")
-        raise HTTPException(502, "Payment provider error")
+        raise HTTPException(502, "Ошибка платежного провайдера")
 
     ops = (((resp.get("Data") or {}).get("Operation")) or [])
     if not ops:
-        raise HTTPException(502, "Payment provider error")
+        raise HTTPException(502, "Ошибка платежного провайдера")
 
     provider_status = (ops[0] or {}).get("status")
     new_status = map_to_internal_status(provider_status)
@@ -196,7 +196,7 @@ async def get_payment_provider_info(
         .first()
     )
     if not p_locked:
-        raise HTTPException(404, "Payment not found")
+        raise HTTPException(404, "Платеж не найден")
 
     old_status, applied = await apply_payment_status(session, p_locked, new_status)
     await session.commit()

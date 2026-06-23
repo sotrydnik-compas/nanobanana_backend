@@ -35,6 +35,14 @@ client = NanoBananaClient()
 billing = BillingClient(settings.BILLING_BASE_URL, settings.BILLING_INTERNAL_TOKEN)
 
 
+def _translate_upload_error(detail: str) -> str:
+    if detail.startswith("Unsupported content-type:"):
+        return "Неподдерживаемый тип файла."
+    if detail == "File too large":
+        return f"Файл слишком большой. Максимум {settings.MAX_UPLOAD_MB} МБ."
+    return detail
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -234,41 +242,41 @@ async def generate_pro(
 ):
     user_id = user_ctx.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Не авторизован")
 
     await limit_generate(request, user_id=str(user_id))
 
     if not settings.GEMINI_API_ENABLED:
-        raise HTTPException(status_code=503, detail="Image generation is temporarily unavailable")
+        raise HTTPException(status_code=503, detail="Генерация изображений временно недоступна")
 
     prompt = (prompt or "").strip()
     if not prompt:
-        raise HTTPException(400, detail="Prompt is required")
+        raise HTTPException(400, detail="Промпт обязателен")
 
     if len(prompt) > settings.MAX_PROMPT_LEN:
-        raise HTTPException(400, detail="Prompt too long")
+        raise HTTPException(400, detail=f"Промпт слишком длинный. Максимум {settings.MAX_PROMPT_LEN} символов.")
 
     if resolution not in SUPPORTED_RESOLUTIONS:
-        raise HTTPException(400, detail="Invalid resolution")
+        raise HTTPException(400, detail="Некорректное разрешение")
 
     if aspectRatio not in SUPPORTED_ASPECT_RATIOS:
-        raise HTTPException(400, detail="Invalid aspectRatio")
+        raise HTTPException(400, detail="Некорректное соотношение сторон")
 
     output_format = (outputFormat or "png").strip().lower()
     if output_format == "jpeg":
         output_format = "jpg"
     if output_format not in {"png", "jpg"}:
-        raise HTTPException(400, detail="Invalid outputFormat")
+        raise HTTPException(400, detail="Некорректный формат результата")
 
     uploads = images or []
     if len(uploads) > settings.MAX_IMAGE_URLS:
-        raise HTTPException(400, detail="Too many images")
+        raise HTTPException(400, detail=f"Слишком много изображений. Максимум {settings.MAX_IMAGE_URLS}.")
 
     # чат: либо используем существующий, либо создаём новый
     if chat_id:
         chat = await session.get(Chat, chat_id)
         if not chat or chat.deleted_at is not None:
-            raise HTTPException(status_code=404, detail="Chat not found")
+            raise HTTPException(status_code=404, detail="Чат не найден")
 
         # “claim” старых чатов после добавления user_id
         if chat.user_id is None:
@@ -277,10 +285,10 @@ async def generate_pro(
             await session.refresh(chat)
 
         if chat.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+            raise HTTPException(status_code=403, detail="Доступ запрещен")
 
         if chat.status == "closed":
-            raise HTTPException(status_code=400, detail="Chat is closed")
+            raise HTTPException(status_code=400, detail="Чат закрыт")
 
     else:
         chat = Chat(title=make_chat_title(prompt), user_id=user_id)
@@ -301,9 +309,13 @@ async def generate_pro(
             name = await save_upload(up, max_bytes=max_bytes, subdir=refs_subdir)
             local_files.append(name)
             image_urls.append(f"{settings.PUBLIC_BASE_URL}/media/{name}")
+        except HTTPException as e:
+            cleanup_saved_upload_paths(local_files)
+            raise HTTPException(status_code=e.status_code, detail=_translate_upload_error(str(e.detail)))
         except Exception as e:
+            cleanup_saved_upload_paths(local_files)
             logger.error(f"Error saving upload {up.filename}: {e}")
-            raise
+            raise HTTPException(status_code=500, detail="Не удалось сохранить файл")
 
     # auto-reference
     last_url = await get_last_success_result_url(session, chat_id)
@@ -349,13 +361,13 @@ async def generate_pro(
         cleanup_saved_upload_paths(local_files)
         await session.delete(t)
         await session.commit()
-        raise HTTPException(status_code=402, detail="Not enough requests")
+        raise HTTPException(status_code=402, detail="Недостаточно запросов")
     except Exception as e:
         cleanup_saved_upload_paths(local_files)
         await session.delete(t)
         await session.commit()
         logger.error(f"[billing] reserve failed: {e}")
-        raise HTTPException(status_code=503, detail="Billing unavailable")
+        raise HTTPException(status_code=503, detail="Сервис оплаты недоступен")
 
     t.status = "queued"
     t.billing_state = "reserved"
@@ -390,7 +402,7 @@ async def generate_pro(
     except Exception as e:
         logger.error(f"Failed to enqueue Gemini task {task_id}: {e}")
         t.status = "failed"
-        t.error_message = "Queue unavailable"
+        t.error_message = "Очередь временно недоступна"
         try:
             await billing.cancel(user_id=str(user_id), request_id=request_id)
             t.billing_state = "refunded"
@@ -398,7 +410,7 @@ async def generate_pro(
             logger.error(f"[billing] cancel failed after queue error: {ce}")
         cleanup_saved_upload_paths(local_files)
         await session.commit()
-        raise HTTPException(status_code=503, detail="Queue unavailable")
+        raise HTTPException(status_code=503, detail="Очередь временно недоступна")
 
     return {"taskId": task_id, "chatId": chat_id}
 
@@ -411,11 +423,11 @@ async def get_task(
 ):
     user_id = user_ctx.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        raise HTTPException(status_code=401, detail="Не авторизован")
 
     t = await session.get(Task, task_id)
     if not t:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(status_code=404, detail="Задача не найдена")
 
     # “claim” старых задач после добавления user_id
     if t.user_id is None:
@@ -424,7 +436,7 @@ async def get_task(
         await session.refresh(t)
 
     if t.user_id != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
 
     # Используем вынесенную функцию
     return await _get_task_status(t, session)
