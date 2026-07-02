@@ -243,9 +243,9 @@ class GeminiClient:
             f"response_snippet={json.dumps(data, ensure_ascii=False)[:2000]}"
         )
         if user_message:
-            normalized_message = self._format_user_error("модель вернула текст вместо изображения.")
+            normalized_message = self._format_user_error("модель вернула текст вместо изображения. Измените запрос.")
         else:
-            normalized_message = self._format_user_error("модель не вернула изображение.")
+            normalized_message = self._format_user_error("изображение не получено. Измените запрос.")
         raise GeminiError(
             "Gemini response does not contain an image",
             user_message=normalized_message,
